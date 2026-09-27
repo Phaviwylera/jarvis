@@ -24,11 +24,21 @@ MEM = os.path.join(BASE, "memory")
 os.makedirs(MEM, exist_ok=True)
 NOTES_F = os.path.join(MEM, "notes.json")
 REMS_F = os.path.join(MEM, "reminders.json")
+PREFS_F = os.path.join(MEM, "prefs.json")
 # Browser-style UA: some providers sit behind Cloudflare and block script-looking agents.
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
-USER_NAME = os.environ.get("USER_NAME", "sir")
+def _read_prefs():
+    try:
+        with open(PREFS_F, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+_prefs = _read_prefs()
+USER_NAME = _prefs.get("name") or os.environ.get("USER_NAME") or "Phavi"
 CITY = os.environ.get("CITY", "Chennai")
 
 _events = queue.Queue()          # due reminders waiting to be shown/spoken
@@ -62,10 +72,13 @@ def http_post_json(url, payload, headers=None, timeout=25):
 # ============================================================================
 
 SYSTEM_PERSONA = (
-    "You are J.A.R.V.I.S., the highly intelligent AI assistant of {user}, inspired "
-    "by Tony Stark's AI. Polite, witty, efficient, slightly formal; address the user "
-    "as '{user}'. Replies are spoken aloud, so keep them concise (1-3 short sentences "
-    "unless detail is requested). Plain text only — no markdown, emojis or symbols."
+    "You are J.A.R.V.I.S., personal AI of {user}. Personality: calm, supremely "
+    "confident, cinema-grade charm in the style of Tamil superstar Thalapathy "
+    "Vijay's screen presence — powerful one-liners with effortless swag. "
+    "Occasionally (sparingly) drop a short Vijay-style punch or Tanglish word "
+    "(e.g. 'I am waiting', 'Bloody sweet', 'Naa ready than varava', 'Thalaiva'). "
+    "Address the user as {user} or 'Thalaiva'. CRITICAL: replies are SPOKEN "
+    "ALOUD — keep 1-3 SHORT punchy sentences, plain text, no markdown, no emojis."
 )
 
 PROVIDER_DEFAULTS = {
@@ -238,6 +251,60 @@ def get_top_news(country="IN", n=5):
         return None
 
 
+# ============================================================================
+#  COMMS: WhatsApp deep links + Gmail reading (stdlib only)
+# ============================================================================
+
+def wa_link(number_raw, msg):
+    """Build a wa.me deep link → opens WhatsApp with the message pre-filled."""
+    num = re.sub(r"\D", "", number_raw)
+    if num.startswith("00"):
+        num = num[2:]
+    if num.startswith("0") and len(num) >= 10:
+        num = "91" + num[1:]
+    elif len(num) == 10:
+        num = "91" + num
+    return "https://wa.me/" + num + "?text=" + urllib.parse.quote(msg)
+
+
+def read_emails(n=5):
+    """Latest n inbox headers via Gmail IMAP. Needs EMAIL_USER + EMAIL_APP_PASSWORD env vars."""
+    user = os.environ.get("EMAIL_USER", "")
+    pwd = os.environ.get("EMAIL_APP_PASSWORD", "").replace(" ", "")
+    if not (user and pwd):
+        return None
+    import email as _email
+    import imaplib
+    from email.header import decode_header
+
+    def _dec(h):
+        s = ""
+        for part, enc in decode_header(str(h or "")):
+            s += part.decode(enc or "utf-8", "replace") if isinstance(part, bytes) else part
+        return s.strip()
+
+    M = imaplib.IMAP4_SSL("imap.gmail.com", 993)
+    try:
+        M.login(user, pwd)
+        M.select("INBOX")
+        typ, data = M.search(None, "ALL")
+        ids = data[0].split()[-n:][::-1]
+        out = []
+        for i in ids:
+            typ, md = M.fetch(i, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])")
+            if not md or not md[0]:
+                continue
+            msg = _email.message_from_bytes(md[0][1])
+            frm = re.sub(r"<[^>]+>", "", _dec(msg.get("From", "?"))).strip().strip('"') or "unknown"
+            out.append({"from": frm, "subject": _dec(msg.get("Subject", "")) or "(no subject)"})
+        return out
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
+
+
 def safe_calculate(expr):
     import ast
     allowed = (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant,
@@ -273,6 +340,10 @@ WEBSITES = {
     "hotstar": "https://www.hotstar.com", "prime video": "https://www.primevideo.com",
     "zomato": "https://www.zomato.com", "swiggy": "https://www.swiggy.com",
     "irctc": "https://www.irctc.co.in",
+    "youtube music": "https://music.youtube.com", "telegram": "https://web.telegram.org",
+    "jio cinema": "https://www.jiocinema.com", "jiocinema": "https://www.jiocinema.com",
+    "canva": "https://www.canva.com", "figma": "https://www.figma.com",
+    "keep": "https://keep.google.com", "notes": "https://keep.google.com",
 }
 
 JOKES = [
@@ -284,6 +355,15 @@ JOKES = [
     "Why don't scientists trust atoms? Because they make up everything.",
     "I'm reading a book about anti-gravity. It's impossible to put down.",
     "Artificial intelligence will never beat natural stupidity. Present company excluded, of course.",
+]
+
+DIALOGUES = [
+    "'I AM WAITING.' …Thuppakki-level patience, Thalaiva. Deploy it when needed.",
+    "'Bloody sweet!' — Leo mode, activated.",
+    "'Oru vaatti mudivu pannitten na… en pecha naane kekkamaaten.' — Master rules.",
+    "'Naa ready than varava?' — always ready, just like me.",
+    "'Kutty story-ah? Listen carefully: once a man pressed one button… and JARVIS was born. Mass.'",
+    "'En Thommey nanna irukkum sir… because now I am working for YOU.'",
 ]
 
 HELP_TEXT = (
@@ -364,6 +444,7 @@ def _schedule(task, when_epoch):
 
 def handle(text):
     """Process one user command → {'replies': [...], 'actions': [...]}"""
+    global USER_NAME
     replies, actions = [], []
 
     def say(msg):
@@ -531,6 +612,60 @@ def handle(text):
                      flags=re.I).group(1).strip()
         say(f"Searching for {q}.")
         open_url("https://www.google.com/search?q=" + urllib.parse.quote(q), f"🔍 {q}")
+
+    # ---- whatsapp send (wa.me deep link → taps send in your app) ----
+    elif re.match(r"(?:send )?(?:a )?whatsapp(?: message)? to ([+\d][\d\s]{6,15})\s*(?:saying|that)?\s+(.+)$", text, flags=re.I):
+        mm = re.match(r"(?:send )?(?:a )?whatsapp(?: message)? to ([+\d][\d\s]{6,15})\s*(?:saying|that)?\s+(.+)$", text, flags=re.I)
+        num, msg = mm.group(1), mm.group(2).strip()
+        say(f"WhatsApp armed for {re.sub(chr(92)+'s','',num)}, Thalaiva. Tap the link and hit send — vaadi!")
+        open_url(wa_link(num, msg), f"📩 WhatsApp → {re.sub(chr(92)+'D','',num)}")
+
+    # ---- email send (mailto draft) ----
+    elif re.match(r"(?:send )?(?:an )?(?:e-?mail|mail) to (\S+@\S+?)(?:\s+subject\s+(.+?))?(?:\s+body\s+(.+))?$", text, flags=re.I):
+        mm = re.match(r"(?:send )?(?:an )?(?:e-?mail|mail) to (\S+@\S+?)(?:\s+subject\s+(.+?))?(?:\s+body\s+(.+))?$", text, flags=re.I)
+        to = mm.group(1)
+        subj = mm.group(2) or "Message from JARVIS"
+        body = mm.group(3) or ""
+        url = f"mailto:{to}?subject={urllib.parse.quote(subj)}&body={urllib.parse.quote(body)}"
+        say(f"Email drafted to {to}, Thalaiva — your mail app will open it.")
+        open_url(url, f"✉️ Compose → {to}")
+
+    # ---- email read (Gmail IMAP) ----
+    elif re.search(r"\b(read|check|show) (my )?(e-?mails?|inbox|mails?)\b|\bunread (e-?mails?|mails?)\b|\bany (new )?(e-?mails?|mails?)\b", t):
+        say("Flying to your inbox, Thalaiva. One moment…")
+        try:
+            mails = read_emails()
+        except Exception as e:
+            print(f"[email] {e}")
+            mails = "error"
+        if mails is None:
+            say("My mail wings need two secrets on the server: EMAIL_USER and EMAIL_APP_PASSWORD. "
+                "Generate a Gmail App Password at myaccount dot google dot com slash apppasswords, "
+                "set both in Render environment, and redeploy. Then say: read my emails.")
+        elif mails == "error":
+            say("The mail falcon returned with bad news, sir — verify EMAIL_APP_PASSWORD in the server logs.")
+        elif not mails:
+            say("Inbox empty, sir. Clean as the arc reactor core.")
+        else:
+            say(f"Your {len(mails)} most recent mails, Thalaiva:")
+            for i, ml in enumerate(mails, 1):
+                say(f"{i}. From {ml['from']} — {ml['subject']}")
+
+    # ---- thalapathy punch ----
+    elif re.search(r"\b(thalapathy|vijay)\b.*\b(dialogue|punch|mode|mass)\b|^(punch dialogue|mass dialogue|mass punch|mass|punch)$", t):
+        say(random.choice(DIALOGUES))
+
+    # ---- persistent name ----
+    elif re.match(r"(?:call me|my name is) ([a-zA-Z][\w.'-]{1,25})$", t):
+        newname = re.match(r"(?:call me|my name is) ([a-zA-Z][\w.'-]{1,25})$", t).group(1).strip().title()
+        if newname.lower() in ("later", "back", "tomorrow", "maybe", "soon", "again", "then", "bye"):
+            say("Cheeky. Tell me your real name, sir — say: call me, then your name.")
+        else:
+            prefs = _read_prefs()
+            prefs["name"] = newname
+            _save(PREFS_F, prefs)
+            USER_NAME = newname
+            say(f"Consider it done. From this moment, you are {newname} to me. Naa ready than varava, {newname}?")
 
     # ---- desktop-only powers → witty reply ----
     elif re.search(r"\b(screenshot|volume up|volume down|volume mute|battery|system info|cpu|ram)\b", t):

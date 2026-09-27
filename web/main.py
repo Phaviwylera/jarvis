@@ -52,7 +52,8 @@ def health():
                 "GROQ_API_KEY": bool(os.environ.get("GROQ_API_KEY")),
                 "OPENAI_API_KEY": bool(os.environ.get("OPENAI_API_KEY")),
             },
-            "provider": os.environ.get("JARVIS_LLM_PROVIDER", "gemini")}
+            "provider": os.environ.get("JARVIS_LLM_PROVIDER", "gemini"),
+            "user": brain.USER_NAME}
 
 
 # Static site (must be mounted last so /api routes win)

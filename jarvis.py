@@ -58,7 +58,7 @@ USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 # ============================================================================
 
 DEFAULT_CONFIG = {
-    "user_name": "sir",                 # how JARVIS addresses you ("sir", "Tony", your name...)
+    "user_name": "Phavi",               # how JARVIS addresses you ("sir", "Phavi", your name...)
     "city": "Chennai",                  # default city for weather
     "stt_language": "en-IN",            # speech recognition language (en-US, en-GB, hi-IN, ...)
     "wake_word": "jarvis",              # activation word when wake-word mode is on
@@ -301,11 +301,14 @@ def http_post_json(url, payload, headers=None, timeout=25):
 # ============================================================================
 
 SYSTEM_PERSONA = (
-    "You are J.A.R.V.I.S., the highly intelligent AI assistant of {user}, "
-    "inspired by Tony Stark's AI. You are polite, witty, efficient and slightly "
-    "formal, addressing the user as '{user}'. IMPORTANT: your replies are "
-    "spoken aloud, so keep them concise (1-3 short sentences unless detail is "
-    "explicitly requested), use plain text with no markdown, emojis or symbols."
+    "You are J.A.R.V.I.S., personal AI of {user}. Personality: calm, supremely "
+    "confident, cinema-grade charm in the style of Tamil superstar Thalapathy "
+    "Vijay's screen presence — powerful one-liners with effortless swag. "
+    "Occasionally (sparingly) drop a short Vijay-style punch or Tanglish word "
+    "(e.g. 'I am waiting', 'Bloody sweet', 'Naa ready than varava', 'Thalaiva'). "
+    "Address the user as {user} or 'Thalaiva'. IMPORTANT: replies are SPOKEN "
+    "ALOUD — keep to 1-3 SHORT punchy sentences, plain text, no markdown, emojis "
+    "or symbols."
 )
 
 
@@ -493,6 +496,56 @@ def get_top_news(country="IN", n=5):
         return [re.sub(r"\s+-\s+[^-]+$", "", it.text or "") for it in items]
     except Exception:
         return None
+
+
+def wa_link(number_raw, msg):
+    """wa.me deep link → WhatsApp opens with the message pre-filled."""
+    num = re.sub(r"\D", "", number_raw)
+    if num.startswith("00"):
+        num = num[2:]
+    if num.startswith("0") and len(num) >= 10:
+        num = "91" + num[1:]
+    elif len(num) == 10:
+        num = "91" + num
+    return "https://wa.me/" + num + "?text=" + urllib.parse.quote(msg)
+
+
+def read_emails(n=5):
+    """Latest n Gmail inbox headers via IMAP. Env: EMAIL_USER + EMAIL_APP_PASSWORD."""
+    user = os.environ.get("EMAIL_USER", "")
+    pwd = os.environ.get("EMAIL_APP_PASSWORD", "").replace(" ", "")
+    if not (user and pwd):
+        return None
+    import email as _email
+    import imaplib
+    from email.header import decode_header
+
+    def _dec(h):
+        s = ""
+        for part, enc in decode_header(str(h or "")):
+            s += part.decode(enc or "utf-8", "replace") if isinstance(part, bytes) else part
+        return s.strip()
+
+    M = imaplib.IMAP4_SSL("imap.gmail.com", 993)
+    try:
+        M.login(user, pwd)
+        M.select("INBOX")
+        typ, data = M.search(None, "ALL")
+        ids = data[0].split()[-n:][::-1]
+        out = []
+        for i in ids:
+            typ, md = M.fetch(i, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])")
+            if not md or not md[0]:
+                continue
+            msg = _email.message_from_bytes(md[0][1])
+            frm = re.sub(r"<[^>]+>", "", _dec(msg.get("From", "?"))).strip().strip('"') or "unknown"
+            out.append({"from": frm, "subject": _dec(msg.get("Subject", "")) or "(no subject)"})
+        return out
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
 
 
 def safe_calculate(expr):
@@ -893,6 +946,60 @@ class Jarvis:
         if m:
             target = m.group(1).strip()
             return self.cmd_open(target)
+
+        # --- whatsapp / email ----------------------------------------------
+        m = re.match(r"(?:send )?(?:a )?whatsapp(?: message)? to ([+\d][\d\s]{6,15})\s*(?:saying|that)?\s+(.+)$", text, flags=re.I)
+        if m:
+            num, msg = m.group(1), m.group(2).strip()
+            self.say(f"WhatsApp armed for {re.sub(r'[^0-9+]','',num)}, Thalaiva. Tap send and vaadi!")
+            self.open_url(wa_link(num, msg))
+            return True
+        m = re.match(r"(?:send )?(?:an )?(?:e-?mail|mail) to (\S+@\S+?)(?:\s+subject\s+(.+?))?(?:\s+body\s+(.+))?$", text, flags=re.I)
+        if m:
+            to = m.group(1)
+            subj = m.group(2) or "Message from JARVIS"
+            body = m.group(3) or ""
+            self.say(f"Email drafted to {to}, {self.name}.")
+            self.open_url(f"mailto:{to}?subject={urllib.parse.quote(subj)}&body={urllib.parse.quote(body)}")
+            return True
+        if re.search(r"\b(read|check|show) (my )?(e-?mails?|inbox|mails?)\b|\bunread (e-?mails?|mails?)\b|\bany (new )?(e-?mails?)\b", t):
+            self.say("Flying to your inbox, one moment…")
+            try:
+                mails = read_emails()
+            except Exception as e:
+                print(f"[email] {e}")
+                mails = "error"
+            if mails is None:
+                self.say("Set EMAIL_USER and EMAIL_APP_PASSWORD environment variables for mail reading, sir.")
+            elif mails == "error":
+                self.say("Mail check failed — verify the app password in my logs.")
+            elif not mails:
+                self.say("Inbox empty, sir. Clean as the arc reactor.")
+            else:
+                self.say(f"Your {len(mails)} most recent mails:")
+                for i, ml in enumerate(mails, 1):
+                    self.say(f"{i}. From {ml['from']} — {ml['subject']}")
+            return True
+        if re.search(r"\b(thalapathy|vijay)\b.*\b(dialogue|punch|mode|mass)\b|^(punch dialogue|mass dialogue|mass|punch)$", t):
+            import random as _rnd
+            self.say(_rnd.choice([
+                "'I AM WAITING.' …Thuppakki-level patience, Thalaiva.",
+                "'Bloody sweet!' — Leo mode, activated.",
+                "'Oru vaatti mudivu pannitten na… en pecha naane kekkamaaten.' — Master rules.",
+                "'Naa ready than varava?' — always ready, just like me.",
+            ]))
+            return True
+        m = re.match(r"(?:call me|my name is) ([a-zA-Z][\w.'-]{1,25})$", t)
+        if m:
+            newname = m.group(1).strip().title()
+            if newname.lower() not in ("later", "back", "tomorrow", "maybe", "soon", "again"):
+                self.name = newname
+                self.cfg["user_name"] = newname
+                save_config(self.cfg)
+                self.say(f"Consider it done. From this moment, you are {newname} to me. Naa ready than varava, {newname}?")
+            else:
+                self.say("Cheeky. Tell me your real name, sir.")
+            return True
 
         # --- AI / fallback ----------------------------------------------------
         reply = self.brain.answer(text)

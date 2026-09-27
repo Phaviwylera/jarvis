@@ -183,6 +183,8 @@
     <button class="qbtn">😄 Tell me a joke</button>
     <button class="qbtn">🕐 What time is it</button>
     <button class="qbtn">🎵 Play Believer</button>
+    <button class="qbtn">🎬 Thalapathy punch</button>
+    <button class="qbtn">✉️ Read my emails</button>
     <button class="qbtn" id="voiceTest">🔊 Test voice</button>
     <button class="qbtn">⚡ Help</button>
   </div>
@@ -195,7 +197,7 @@
     <button class="cbtn" id="apibtn" title="Link the brain (backend URL)">⚙️</button>
     <button class="cbtn" id="send" title="Send">➤</button>
   </div>
-  <footer>ARC REACTOR CORE · WAKE-WORD INTERFACE · v1.5</footer>
+  <footer>ARC REACTOR CORE · THALAPATHY EDITION · v1.6</footer>
 </div>
 
 <script>
@@ -203,12 +205,17 @@ const $ = s => document.querySelector(s);
 const chat = $('#chat'), rz = $('#rz'), statusEl = $('#status'), interimEl = $('#interim');
 let soundOn = true, speaking = false, listening = false, userGestureAt = 0;
 let loop = localStorage.getItem('jarvis_loop') !== '0';          // always-on default
-let activated = false;                                            // gesture done THIS session
+let userName = localStorage.getItem('jarvis_username') || 'sir'; // refreshed from /api/health
+let activated = false;
 const wasActivated = localStorage.getItem('jarvis_activated') === '1';
 let loopPaused = false, noSpeechStreak = 0, micBlocked = false, audioUnlocked = false;
 const WAKE_TEST = /\bjarvis\b/i;
 const WAKE_STRIP = /^(?:hey|ok|okay|yo|please|uh|um)[,.\s]+/i;
-const ACK = ["Yes, sir?","At your service, sir.","Listening, sir.","Go ahead, sir.","How may I assist?"];
+function ackText(){
+  const pool = ["Yes, "+userName+"?","At your service, Thalaiva.","Listening, "+userName+".",
+                "Go ahead, "+userName+".","How may I assist?"];
+  return pool[Math.floor(Math.random()*pool.length)];
+}
 
 /* ───────────── full-tab link ───────────── */
 const SELF_URL = location.href;
@@ -251,13 +258,16 @@ async function api(path, opts){
 async function health(){ try{ const r = await api('/api/health'); const d = await r.json();
     $('#net').classList.remove('down');
     $('#net').innerHTML='<span class="dot"></span>'+(d.ai==='offline'?'ONLINE · AI OFF':'ONLINE · '+String(d.ai).toUpperCase());
+    if(d.user){ userName = d.user; localStorage.setItem('jarvis_username', userName); }
   }catch(e){ $('#net').classList.add('down'); $('#net').innerHTML='<span class="dot"></span>LINK DOWN'; } }
 health(); setInterval(health, 30000);
 
 /* ───────────── audio unlock (Chrome policy: one gesture) ───────────── */
 let voice = null;
 function pickVoice(){ const vs = speechSynthesis.getVoices();
-  const pref = ['Google UK English Male','Daniel','Microsoft Ryan','Microsoft David','Google UK English','Google US English'];
+  // deepest male voices first — Thalapathy-grade gravitas
+  const pref = ['Google UK English Male','Microsoft David','Microsoft Ryan','Daniel',
+                'Prabhat','Rishi','Ravi','Google हिन्दी','Microsoft Hemant','Google UK English','Google US English'];
   for(const p of pref){ const v = vs.find(v=>v.name && v.name.includes(p)); if(v) return v; }
   return vs.find(v=>v.lang && v.lang.startsWith('en')) || null; }
 if('speechSynthesis' in window){ speechSynthesis.onvoiceschanged = ()=>{ voice = pickVoice(); }; voice = pickVoice(); }
@@ -279,7 +289,8 @@ function nextSpeak(){
   const clean = t.replace(/[*_`#>~➤↗▶🔍⚡🎙️⏰🔁🌤📰😄🕐🎵🔊]/g,'').trim();
   if(!clean){ nextSpeak(); return; }
   const u = new SpeechSynthesisUtterance(clean);
-  if(voice) u.voice = voice; u.rate = 1; u.pitch = .9; u.volume = 1;
+  if(voice) u.voice = voice;
+  u.rate = .95; u.pitch = .78; u.volume = 1;   // deep, slow, cinematic — Thalapathy modulation
   u.onend = ()=> setTimeout(nextSpeak, 120);
   u.onerror = (e)=>{ if(e && e.error && !['canceled','interrupted'].includes(e.error))
       statusEl.textContent = '🔇 VOICE OUTPUT ERROR — tap anywhere once'; setTimeout(nextSpeak, 120); };
@@ -335,7 +346,7 @@ function processVoice(t){
   let cmd = t.replace(WAKE_STRIP,'').replace(/\bjarvis\b/i,'')
              .replace(/^[\s,.\-…]+|[\s,.\-…]+$/g,'');
   if(!cmd){
-    const ack = ACK[Math.floor(Math.random()*ACK.length)];
+    const ack = ackText();
     addMsg('jarvis', ack); speak(ack); setStatus(); return;
   }
   doSend(cmd);
@@ -458,7 +469,7 @@ function activate(){
   speechSynthesis.getVoices(); voice = pickVoice();
   setLoop(true);
   startListen();
-  const g = 'All systems online, sir. Audio channel confirmed. I am listening — address me as JARVIS, and consider it done.';
+  const g = 'All systems online, '+userName+'. Audio channel confirmed. I am listening — address me as JARVIS, and consider it done. Naa ready than varava!';
   addMsg('jarvis', g); speak(g);
 }
 $('#actbtn').onclick = activate;
@@ -471,7 +482,7 @@ let bi=0; const blog=$('#bootlog');
 (function typeBoot(){ if(bi<lines.length){ blog.textContent+=lines[bi++]+'\n'; setTimeout(typeBoot,300); }
   else setTimeout(()=>{ $('#boot').classList.add('hide');
     const h=new Date().getHours(), tod=h<12?'Good morning':h<17?'Good afternoon':'Good evening';
-    addMsg('jarvis', tod+', sir. JARVIS at the ready.' + (rec ? ' Tap ⚡ ACTIVATE and I shall begin listening for “JARVIS …”.' : ' This browser lacks voice input — typing works perfectly.'));
+    addMsg('jarvis', tod+', '+userName+'. JARVIS at the ready.' + (rec ? ' Tap ⚡ ACTIVATE and I shall begin listening for “JARVIS …”.' : ' This browser lacks voice input — typing works perfectly.'));
     if(rec){ $('#activate').classList.add('show'); }          /* one tap → always-on */
     if(!loop){ $('#rebar').classList.add('show'); }
     setStatus();

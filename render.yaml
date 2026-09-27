@@ -17,7 +17,7 @@ services:
       - key: JARVIS_LLM_PROVIDER
         value: gemini
       - key: USER_NAME
-        value: sir
+        value: Phavi
       - key: CITY
         value: Chennai
       # Set these in the Render dashboard (Environment) — NEVER commit keys.
@@ -27,4 +27,9 @@ services:
       - key: GROQ_API_KEY          # groq key  (backup brain #1)
         sync: false
       - key: OPENAI_API_KEY        # openai key (backup brain #2, optional)
+        sync: false
+      # Email reading ("jarvis, read my emails") — Gmail + App Password:
+      - key: EMAIL_USER            # your gmail address
+        sync: false
+      - key: EMAIL_APP_PASSWORD    # from myaccount.google.com/apppasswords
         sync: false

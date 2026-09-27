@@ -20,13 +20,17 @@ Your personal AI assistant — **two bodies, one brain**:
 
 | Category | Desktop 🖥️ | Web 🌐 |
 |---|---|---|
-| Voice interaction (talk 👂 listen 🔊) | ✅ system mic & speakers | ✅ browser Web Speech API |
-| AI answers (Gemini / OpenAI / Groq / Ollama) | ✅ | ✅ |
+| Voice interaction (talk 👂 listen 🔊) | ✅ system mic & speakers | ✅ Web Speech API + **wake-word "jarvis"**, always-on loop, barge-in stop |
+| 🎬 Thalapathy mode | ✅ deep voice + punch dialogues, calls you by your name | ✅ same persona + voice modulation |
+| AI answers — failover chain (Gemini→Groq→OpenAI) | ✅ | ✅ |
+| 📩 WhatsApp send (`whatsapp to 98xxx saying vanakkam`) | ✅ opens wa.me | ✅ taps open in your app |
+| ✉️ Email send (`email to boss@x.com subject Hi body …`) | ✅ mail app draft | ✅ same |
+| 📥 Email read (`read my emails`) | ✅ via IMAP env keys | ✅ via IMAP env keys |
 | Weather, news, Wikipedia, web search | ✅ | ✅ |
 | Reminders & notes | ✅ (survive restarts) | ✅ (server-side) |
 | Music on YouTube | ✅ autoplay | ✅ opens player tab |
 | Open apps, screenshots, volume, battery | ✅ | — (browser sandbox) |
-| Open websites, downloads | ✅ | ✅ |
+| Open websites / web apps | ✅ | ✅ |
 | Works with zero dependencies (text mode) | ✅ | ✅ (stdlib brain) |
 
 ---
@@ -65,9 +69,31 @@ In Render dashboard → your service → **Environment** → add:
 | `JARVIS_API_KEY` | your Gemini key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | 🧠 primary brain |
 | `GROQ_API_KEY` | your Groq key from [console.groq.com/keys](https://console.groq.com/keys) | 🛟 backup brain #1 |
 | `OPENAI_API_KEY` | *(optional)* OpenAI key | 🛟 backup brain #2 |
-| `USER_NAME` | what JARVIS calls you — `sir` / your name | 🎩 persona |
+| `EMAIL_USER` | your Gmail address | 📥 mail reading |
+| `EMAIL_APP_PASSWORD` | from [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) *(NOT your Gmail password!)* | 📥 mail reading |
+| `USER_NAME` | your name — `Phavi` | 🎩 persona |
 
 Then **Save Changes** (auto-redeploys). Keys live only on the server — never in Git. 🔒
+
+### 🎬 Thalapathy mode & your name
+- JARVIS's persona has cinema-grade swag (punch dialogues, Tanglish, "I am waiting").
+  Try: **"jarvis, thalapathy dialogue"** 🎬
+- Voice = deepest available male + slowed, low-pitched modulation. *(Note: cloning a real
+  celebrity voice requires paid voice-AI + legal rights — this is the closest legit setup,
+  and honestly… bloody sweet.)*
+- Say **"call me Phavi"** (or any name) once — he remembers forever (works on the deployed site too).
+- 🗣️ Voice control: tap ⚡ ACTIVATE once → always-on. Only sentences starting **"jarvis …"**
+  execute; everything else is ignored. Say **"stop"** any time (even mid-speech) to silence him.
+
+### 📧 Enable email reading (2 min)
+1. Google Account → Security → 2-Step Verification ON
+2. Open [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) → create app password → copy the 16-letter code
+3. Render → service → Environment → set `EMAIL_USER` (your Gmail) + `EMAIL_APP_PASSWORD` (the 16 letters, spaces ok) → Save
+4. Say: **"jarvis, read my emails"** 📥
+
+### 📩 WhatsApp & email sending (no setup!)
+- **"jarvis, whatsapp to 9876543210 saying vanakkam nanba"** → opens WhatsApp with text pre-filled — you hit send. (Fully automatic sending needs Meta's paid Business API — ask me to wire it if you need true hands-free.)
+- **"jarvis, email to boss@company.com subject Leave body I need Friday off"** → your mail app opens with the draft ready.
 
 ### 🔁 Automatic AI failover (built-in)
 JARVIS keeps a **chain of brains**: Gemini → Groq → OpenAI (any with a key joins automatically).
