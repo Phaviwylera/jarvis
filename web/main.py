@@ -46,7 +46,13 @@ def events():
 def health():
     return {"status": "online",
             "ai": brain.AI.status(),
-            "last_used": brain.AI.last_used}
+            "last_used": brain.AI.last_used,
+            "keys_present": {                      # masked diagnostic: names only, never values
+                "JARVIS_API_KEY": bool(os.environ.get("JARVIS_API_KEY")),
+                "GROQ_API_KEY": bool(os.environ.get("GROQ_API_KEY")),
+                "OPENAI_API_KEY": bool(os.environ.get("OPENAI_API_KEY")),
+            },
+            "provider": os.environ.get("JARVIS_LLM_PROVIDER", "gemini")}
 
 
 # Static site (must be mounted last so /api routes win)
