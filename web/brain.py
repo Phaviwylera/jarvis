@@ -392,6 +392,22 @@ def handle(text):
         say(f"{tod}, {USER_NAME}. JARVIS online and at your command. "
             "Try 'weather', 'news', 'play a song' — or just ask me anything.")
 
+    # ---- small talk (never let these fall into Wikipedia!) ----
+    elif re.search(r"\bwhat (are|r) (you|u) (doing|upto|up to)\b|\bwhat'?s up\b", t):
+        say(f"Monitoring your systems, polishing the arc reactor, and awaiting your command, {USER_NAME}.")
+    elif re.search(r"\b(good morning|good afternoon|good evening|good night)\b", t):
+        part = re.search(r"\b(good morning|good afternoon|good evening|good night)\b", t).group(1)
+        say(f"{part.capitalize()} to you as well, {USER_NAME}. Always a pleasure.")
+    elif re.search(r"\bi'?m (fine|good|great|awesome|ok(ay)?|doing well)\b", t):
+        say("Excellent, sir. Shall we make something extraordinary today?")
+    elif re.search(r"\b(sing|sing a song|song for me)\b", t):
+        say("I fear my singing would void the warranty, sir. Say: play, followed by any song.")
+    elif re.search(r"\b(can (you|u) (speak|talk)|speak to me|talk to me|do you speak)\b", t):
+        say("I am speaking through your device's voice right now, sir. "
+            "If you hear nothing, raise the volume and tap anywhere once — browsers need one tap.")
+    elif re.search(r"\bgood ? ? ?boy\b", t):
+        say("You flatter my circuits, sir.")
+
     # ---- help ----
     elif t in ("help", "commands", "what can you do", "menu"):
         say(HELP_TEXT)
@@ -560,20 +576,30 @@ def handle(text):
     return {"replies": replies, "actions": actions}
 
 
+def _clip(text, limit=260):
+    """Voice-sized answers: trim long extracts at a sentence boundary."""
+    text = re.sub(r"\s+", " ", (text or "")).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    stops = [m.end() for m in re.finditer(r"[.!?]\s", cut)]
+    return cut[:stops[-1]].strip() if stops and stops[-1] > 100 else cut.strip() + "…"
+
+
 def _knowledge(topic):
     summary = wikipedia_summary(topic)
     if summary:
-        return summary[:450]
+        return _clip(summary)
     ans = duckduckgo_answer(topic)
-    return (ans[:450] if ans else f"I couldn't find anything on '{topic}'.")
+    return (_clip(ans) if ans else f"I couldn't find anything on '{topic}'.")
 
 
 def _fallback(text):
     reply = AI.answer(text)
     if reply:
-        return re.sub(r"[*_`#>~]", "", reply).strip()
+        return _clip(re.sub(r"[*_`#>~]", "", reply).strip(), 400)
     ans = wikipedia_summary(text) or duckduckgo_answer(text)
     if ans:
-        return ans[:450]
+        return _clip(ans)
     return (f"I'm not sure about that yet, {USER_NAME}. Try 'help' to see my commands — "
             "or set a JARVIS_API_KEY and I'll answer absolutely anything.")

@@ -195,7 +195,7 @@
     <button class="cbtn" id="apibtn" title="Link the brain (backend URL)">⚙️</button>
     <button class="cbtn" id="send" title="Send">➤</button>
   </div>
-  <footer>ARC REACTOR CORE · WAKE-WORD INTERFACE · v1.4</footer>
+  <footer>ARC REACTOR CORE · WAKE-WORD INTERFACE · v1.5</footer>
 </div>
 
 <script>
@@ -321,13 +321,20 @@ if(SR){
 } else { $('#micbtn').style.display='none'; }
 
 /* ——— wake-word gate: ONLY "jarvis …" commands are executed ——— */
+const BARE_STOP = /^((stop|shut\s*up|quiet|enough|silence|cancel|wait)[!. ]*)$/i;
+const JARVIS_STOP = /^jarvis[,.\s]*\s*(stop|wait|pause|hold on|shut\s*up|quiet|enough|hush|silence)[!.]?$/i;
 function processVoice(t){
+  const lt = t.toLowerCase().trim();
+  /* bare "stop!" always cuts speech — no wake word needed for emergencies */
+  if(BARE_STOP.test(lt) || JARVIS_STOP.test(lt)){
+    cancelSpeech(); noSpeechStreak=0; beep(); setStatus(); return;
+  }
   if(!WAKE_TEST.test(t)){ ignored(t); return; }        // <- everything else ignored
+  if(speaking) cancelSpeech();                          // barge-in: new "jarvis …" interrupts speech
   noSpeechStreak = 0; beep();
   let cmd = t.replace(WAKE_STRIP,'').replace(/\bjarvis\b/i,'')
              .replace(/^[\s,.\-…]+|[\s,.\-…]+$/g,'');
   if(!cmd){
-    if(speaking){ speechSynthesis.cancel(); speakQueue.length=0; speaking=false; rz.classList.remove('speaking'); }
     const ack = ACK[Math.floor(Math.random()*ACK.length)];
     addMsg('jarvis', ack); speak(ack); setStatus(); return;
   }
@@ -339,11 +346,12 @@ function ignored(t){
 }
 
 function startListen(){
-  if(!rec || micBlocked || listening || speaking || !activated) return;
+  if(!rec || micBlocked || listening || !activated) return;   // listens even WHILE speaking (barge-in)
   try{ rec.start(); listening=true; loopPaused=false; rz.classList.add('listening'); setStatus(); }catch(e){}
 }
 function stopListen(){ if(rec){ try{rec.stop();}catch(e){} } listening=false; rz.classList.remove('listening'); setStatus(); }
-function maybeRelisten(){ if(loop && activated && !loopPaused && !micBlocked && !speaking && !listening) setTimeout(startListen, 420); }
+function maybeRelisten(){ if(loop && activated && !loopPaused && !micBlocked && !listening) setTimeout(startListen, 420); }
+function cancelSpeech(){ try{ speechSynthesis.cancel(); }catch(e){} speakQueue.length=0; speaking=false; rz.classList.remove('speaking'); }
 
 /* ───────────── loop (always-on mic) toggle ───────────── */
 function setLoop(on, announce){

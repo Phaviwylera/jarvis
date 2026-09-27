@@ -753,6 +753,9 @@ class Jarvis:
             self.say(f"All systems running at optimal capacity, {self.name}. "
                      "Thank you for asking. How can I help?")
             return True
+        if re.search(r"\bwhat (are|r) (you|u) (doing|upto|up to)\b|\bwhat'?s up\b", t):
+            self.say(f"Monitoring your systems, polishing the arc reactor, and awaiting your command, {self.name}.")
+            return True
         if re.search(r"\b(thank you|thanks|thanked)\b", t):
             self.say(f"Always at your service, {self.name}.")
             return True
