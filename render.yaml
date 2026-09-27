@@ -1,0 +1,25 @@
+# ================================================================
+#  Render.com Blueprint — one-click deploy for the JARVIS web app
+#  Dashboard: New +  →  Blueprint  →  pick this repo  →  Apply
+#  Every future `git push` to main auto-redeploys. Easy upgrades. 🚀
+# ================================================================
+services:
+  - type: web
+    name: jarvis
+    runtime: python
+    plan: free
+    rootDir: web
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: JARVIS_LLM_PROVIDER
+        value: gemini
+      - key: USER_NAME
+        value: sir
+      - key: CITY
+        value: Chennai
+      # Set this in the Render dashboard (Environment) — NEVER commit keys:
+      - key: JARVIS_API_KEY
+        sync: false

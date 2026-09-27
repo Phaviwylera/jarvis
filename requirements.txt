@@ -1,0 +1,24 @@
+# ================================================================
+#  J.A.R.V.I.S. dependencies
+#
+#  NOTE: The core assistant runs on Python's standard library alone
+#  (text mode). Install these to unlock full voice & system powers.
+#
+#  Install everything:   pip install -r requirements.txt
+# ================================================================
+
+# --- Voice (speech output) ---
+pyttsx3>=2.90
+
+# --- Voice (microphone input) ---
+SpeechRecognition>=3.10
+PyAudio>=0.2.14
+
+# --- System powers (battery, CPU, RAM) ---
+psutil>=5.9.0
+
+# --- Screenshots & volume keys ---
+pyautogui>=0.9.54
+
+# --- One-command YouTube autoplay (optional but nice) ---
+pywhatkit>=5.4

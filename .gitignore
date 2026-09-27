@@ -1,0 +1,16 @@
+# ── secrets & personal data (NEVER commit) ──
+config.json
+.env
+memory/
+web/memory/
+
+# ── python ──
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ── os junk ──
+.DS_Store
+Thumbs.db

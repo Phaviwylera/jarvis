@@ -1,0 +1,537 @@
+# -*- coding: utf-8 -*-
+"""
+J.A.R.V.I.S. Web Brain — self-contained command + AI logic for the web app.
+Mirrors the desktop assistant, but returns JSON ({replies, actions}) instead
+of speaking aloud. Speech happens in the browser (Web Speech API).
+Pure standard library + the environment. Zero required pip packages.
+"""
+
+import datetime
+import json
+import os
+import queue
+import random
+import re
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+MEM = os.path.join(BASE, "memory")
+os.makedirs(MEM, exist_ok=True)
+NOTES_F = os.path.join(MEM, "notes.json")
+REMS_F = os.path.join(MEM, "reminders.json")
+USER_AGENT = "JARVIS-Web/1.0 (+personal-assistant)"
+
+USER_NAME = os.environ.get("USER_NAME", "sir")
+CITY = os.environ.get("CITY", "Chennai")
+
+_events = queue.Queue()          # due reminders waiting to be shown/spoken
+_lock = threading.Lock()
+
+# ============================================================================
+#  HTTP helpers
+# ============================================================================
+
+def http_get(url, headers=None, timeout=12):
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def http_get_json(url, headers=None, timeout=12):
+    return json.loads(http_get(url, headers, timeout).decode("utf-8", "replace"))
+
+
+def http_post_json(url, payload, headers=None, timeout=25):
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST",
+                                 headers={"Content-Type": "application/json",
+                                          "User-Agent": USER_AGENT, **(headers or {})})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+# ============================================================================
+#  AI brain (env-configured: JARVIS_API_KEY / JARVIS_LLM_PROVIDER)
+# ============================================================================
+
+SYSTEM_PERSONA = (
+    "You are J.A.R.V.I.S., the highly intelligent AI assistant of {user}, inspired "
+    "by Tony Stark's AI. Polite, witty, efficient, slightly formal; address the user "
+    "as '{user}'. Replies are spoken aloud, so keep them concise (1-3 short sentences "
+    "unless detail is requested). Plain text only — no markdown, emojis or symbols."
+)
+
+PROVIDER_DEFAULTS = {
+    "gemini": {"model": "gemini-3.8-flash",
+               "base_url": "https://generativelanguage.googleapis.com/v1beta"},
+    "openai": {"model": "gpt-4o-mini", "base_url": "https://api.openai.com/v1"},
+    "groq":   {"model": "llama-3.3-70b-versatile",
+               "base_url": "https://api.groq.com/openai/v1"},
+    "ollama": {"model": "llama3.1", "base_url": "http://localhost:11434/v1"},
+}
+
+
+class AIBrain:
+    def __init__(self):
+        self.provider = (os.environ.get("JARVIS_LLM_PROVIDER") or "gemini").lower()
+        d = PROVIDER_DEFAULTS.get(self.provider, {})
+        self.model = os.environ.get("JARVIS_MODEL") or d.get("model", "")
+        self.base_url = (os.environ.get("JARVIS_BASE_URL")
+                         or d.get("base_url", "")).rstrip("/")
+        self.api_key = os.environ.get("JARVIS_API_KEY", "")
+        self.history = []
+
+    @property
+    def available(self):
+        return bool(self.api_key) or self.provider == "ollama"
+
+    def answer(self, question):
+        if not self.available:
+            return None
+        self.history.append({"role": "user", "content": question})
+        self.history = self.history[-16:]
+        reply = None
+        for attempt in (1, 2, 3):
+            try:
+                reply = (self._ask_gemini() if self.provider == "gemini"
+                         else self._ask_openai_style())
+                if reply:
+                    break
+            except urllib.error.HTTPError as e:
+                print(f"[ai] {self.provider} attempt {attempt}: HTTP {e.code}")
+                if e.code not in (429, 500, 502, 503, 504):
+                    break                       # auth/bad-request errors won't fix themselves
+            except Exception as e:
+                print(f"[ai] {self.provider} attempt {attempt}: {e}")
+            time.sleep(1.5 * attempt)
+        if reply:
+            self.history.append({"role": "assistant", "content": reply})
+        return reply
+
+    def _ask_gemini(self):
+        convo = "\n".join(("User: " if m["role"] == "user" else "JARVIS: ") + m["content"]
+                          for m in self.history)
+        url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
+        payload = {
+            "system_instruction": {"parts": [{"text": SYSTEM_PERSONA.format(user=USER_NAME)}]},
+            "contents": [{"role": "user", "parts": [{"text": convo}]}],
+            "generationConfig": {"temperature": 0.7},
+        }
+        data = http_post_json(url, payload)
+        return (data["candidates"][0]["content"]["parts"][0]["text"] or "").strip()
+
+    def _ask_openai_style(self):
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        payload = {"model": self.model,
+                   "messages": [{"role": "system",
+                                 "content": SYSTEM_PERSONA.format(user=USER_NAME)}] + self.history,
+                   "temperature": 0.7, "max_tokens": 300}
+        data = http_post_json(f"{self.base_url}/chat/completions", payload, headers=headers)
+        return (data["choices"][0]["message"]["content"] or "").strip()
+
+
+AI = AIBrain()
+
+# ============================================================================
+#  Info services (free, no key)
+# ============================================================================
+
+def wikipedia_summary(topic):
+    topic = topic.strip()
+    if not topic:
+        return None
+    title = urllib.parse.quote(topic.replace(" ", "_"))
+    try:
+        data = http_get_json(f"https://en.wikipedia.org/api/rest_v1/page/summary/{title}")
+        if data.get("extract"):
+            return data["extract"]
+    except Exception:
+        pass
+    try:
+        q = urllib.parse.urlencode({"action": "opensearch", "search": topic,
+                                    "limit": 1, "namespace": 0, "format": "json"})
+        res = http_get_json(f"https://en.wikipedia.org/w/api.php?{q}")
+        if len(res) > 1 and res[1]:
+            return wikipedia_summary(res[1][0])
+    except Exception:
+        pass
+    return None
+
+
+def duckduckgo_answer(query):
+    try:
+        q = urllib.parse.urlencode({"q": query, "format": "json", "no_html": 1,
+                                    "skip_disambig": 1})
+        return http_get_json(f"https://api.duckduckgo.com/?{q}").get("AbstractText") or None
+    except Exception:
+        return None
+
+
+def get_weather(city):
+    try:
+        data = http_get_json(f"https://wttr.in/{urllib.parse.quote(city)}?format=j1")
+        cur = data["current_condition"][0]
+        desc = cur["weatherDesc"][0]["value"]
+        area = data.get("nearest_area", [{}])
+        place = area[0].get("areaName", [{}])[0].get("value", "") if area else ""
+        return (f"Currently in {place or city}: {desc}, {cur['temp_C']}°C "
+                f"(feels like {cur['FeelsLikeC']}°C), humidity {cur['humidity']}%, "
+                f"wind {cur['windspeedKmph']} km/h.")
+    except Exception as e:
+        return f"I couldn't fetch the weather right now ({e})."
+
+
+def get_top_news(country="IN", n=5):
+    try:
+        url = f"https://news.google.com/rss?hl=en-{country}&gl={country}&ceid={country}:en"
+        root = ET.fromstring(http_get(url))
+        items = root.findall(".//item/title")[:n]
+        return [re.sub(r"\s+-\s+[^-]+$", "", i.text or "") for i in items] or None
+    except Exception:
+        return None
+
+
+def safe_calculate(expr):
+    import ast
+    allowed = (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant,
+               ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow,
+               ast.USub, ast.UAdd, ast.FloorDiv, ast.Load)
+    tree = ast.parse(expr, mode="eval")
+    for node in ast.walk(tree):
+        if not isinstance(node, allowed):
+            raise ValueError("bad expression")
+        if isinstance(node, ast.Constant) and not isinstance(node.value, (int, float)):
+            raise ValueError("bad constant")
+    return eval(compile(tree, "<calc>", "eval"), {"__builtins__": {}}, {})
+
+
+# ============================================================================
+#  Data
+# ============================================================================
+
+WEBSITES = {
+    "google": "https://www.google.com", "youtube": "https://www.youtube.com",
+    "gmail": "https://mail.google.com", "mail": "https://mail.google.com",
+    "github": "https://github.com", "stackoverflow": "https://stackoverflow.com",
+    "stack overflow": "https://stackoverflow.com",
+    "whatsapp": "https://web.whatsapp.com", "instagram": "https://www.instagram.com",
+    "facebook": "https://www.facebook.com", "twitter": "https://x.com", "x": "https://x.com",
+    "linkedin": "https://www.linkedin.com", "reddit": "https://www.reddit.com",
+    "netflix": "https://www.netflix.com", "amazon": "https://www.amazon.in",
+    "flipkart": "https://www.flipkart.com", "spotify": "https://open.spotify.com",
+    "maps": "https://maps.google.com", "google maps": "https://maps.google.com",
+    "drive": "https://drive.google.com", "calendar": "https://calendar.google.com",
+    "news": "https://news.google.com", "translate": "https://translate.google.com",
+    "chatgpt": "https://chat.openai.com", "wikipedia": "https://www.wikipedia.org",
+    "hotstar": "https://www.hotstar.com", "prime video": "https://www.primevideo.com",
+    "zomato": "https://www.zomato.com", "swiggy": "https://www.swiggy.com",
+    "irctc": "https://www.irctc.co.in",
+}
+
+JOKES = [
+    "Why do programmers prefer dark mode? Because light attracts bugs.",
+    "I told my computer I needed a break... now it won't stop sending me Kit-Kat ads.",
+    "Why did the developer go broke? He used up all his cache.",
+    "There are only 10 types of people: those who understand binary and those who don't.",
+    "I would tell you a UDP joke, but you might not get it.",
+    "Why don't scientists trust atoms? Because they make up everything.",
+    "I'm reading a book about anti-gravity. It's impossible to put down.",
+    "Artificial intelligence will never beat natural stupidity. Present company excluded, of course.",
+]
+
+HELP_TEXT = (
+    "⚡ MY CAPABILITIES\n"
+    "info: weather [in X] • news • who is/what is • wikipedia X • search X\n"
+    "web: open youtube • open gmail • play <song> • search <anything>\n"
+    "productivity: remind me to X in 10 min / at 6 pm • my reminders • note X • read my notes\n"
+    "fun: tell me a joke • flip a coin • roll a dice • calculate 45*12\n"
+    "…and ask me anything — I answer with AI when a key is configured."
+)
+
+# ============================================================================
+#  Small persistence helpers
+# ============================================================================
+
+def _load(path, default):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def _save(path, data):
+    with _lock:
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"[mem] {e}")
+
+
+def drain_events():
+    out = []
+    while not _events.empty():
+        try:
+            out.append(_events.get_nowait())
+        except queue.Empty:
+            break
+    return out
+
+
+def _reminder_loop():
+    while True:
+        try:
+            now = time.time()
+            with _lock:
+                rems = _load(REMS_F, [])
+                due = [r for r in rems if r.get("when", 0) <= now]
+                keep = [r for r in rems if r.get("when", 0) > now]
+                if due:
+                    with open(REMS_F, "w", encoding="utf-8") as f:
+                        json.dump(keep, f, indent=2)
+            for r in due:
+                _events.put(f"⏰ Reminder for you, {USER_NAME}: {r['task']}")
+        except Exception as e:
+            print(f"[reminders] {e}")
+        time.sleep(3)
+
+
+threading.Thread(target=_reminder_loop, daemon=True).start()
+
+
+def _schedule(task, when_epoch):
+    with _lock:
+        rems = _load(REMS_F, [])
+        rems.append({"task": task, "when": when_epoch})
+        try:
+            with open(REMS_F, "w", encoding="utf-8") as f:
+                json.dump(rems, f, indent=2)
+        except Exception as e:
+            print(f"[reminders] save: {e}")
+
+
+# ============================================================================
+#  MAIN COMMAND HANDLER
+# ============================================================================
+
+def handle(text):
+    """Process one user command → {'replies': [...], 'actions': [...]}"""
+    replies, actions = [], []
+
+    def say(msg):
+        if msg:
+            replies.append(msg)
+
+    def open_url(url, label):
+        actions.append({"type": "open_url", "url": url, "label": label})
+
+    t = (text or "").lower().strip()
+    t = re.sub(r"\s+", " ", t)
+    t = re.sub(r"^(please|hey|ok|okay| jarvis,?)\s+", "", t)
+    if not t:
+        return {"replies": ["Yes? I'm listening."], "actions": []}
+
+    # ---- identity / small talk ----
+    if re.search(r"\b(who are you|your name|about yourself)\b", t):
+        say(f"I am JARVIS — Just A Rather Very Intelligent System, at your service, {USER_NAME}.")
+    elif re.search(r"\bhow are you\b", t):
+        say(f"All systems running at optimal capacity, {USER_NAME}. How can I help?")
+    elif re.search(r"\bthank", t):
+        say(f"Always at your service, {USER_NAME}.")
+    elif t in ("hello", "hi", "hey", "hello jarvis", "hi jarvis", "greetings", "start"):
+        h = datetime.datetime.now().hour
+        tod = "Good morning" if h < 12 else "Good afternoon" if h < 17 else "Good evening"
+        say(f"{tod}, {USER_NAME}. JARVIS online and at your command. "
+            "Try 'weather', 'news', 'play a song' — or just ask me anything.")
+
+    # ---- help ----
+    elif t in ("help", "commands", "what can you do", "menu"):
+        say(HELP_TEXT)
+
+    # ---- time & date ----
+    elif re.search(r"\b(what('s| is)?|tell me|current)\b.*\btime\b", t) or t == "time":
+        say(f"It's {datetime.datetime.now().strftime('%I:%M %p')}, {USER_NAME}.")
+    elif re.search(r"\b(what('s| is)?|today('s| is)?)\b.*\bdate\b", t) or t in ("date", "today"):
+        say(f"Today is {datetime.datetime.now().strftime('%A, %B %d, %Y')}.")
+    elif re.search(r"\bwhat day\b", t):
+        say(f"It's {datetime.datetime.now().strftime('%A')}.")
+
+    # ---- calculations ----
+    elif re.match(r"(?:calculate|compute|what is|what's|solve)\s+([\d\.,\s\+\-\*\/\%\(\)\^]+)$", t):
+        expr = re.match(r"(?:calculate|compute|what is|what's|solve)\s+(.+)$", t).group(1)
+        expr = expr.replace("^", "**").replace(",", "").strip()
+        try:
+            result = safe_calculate(expr)
+            result = round(result, 6) if isinstance(result, float) else result
+            say(f"That comes to {result}, {USER_NAME}.")
+        except Exception:
+            say("I couldn't compute that expression.")
+
+    # ---- fun ----
+    elif re.search(r"\b(tell me a joke|joke|make me laugh)\b", t):
+        say(random.choice(JOKES))
+    elif re.search(r"\bflip a coin\b", t):
+        say(random.choice(["Heads.", "Tails."]))
+    elif re.search(r"\broll (a |the )?(dice|die)\b", t):
+        say(f"The die shows {random.randint(1, 6)}.")
+
+    # ---- weather ----
+    elif re.search(r"\bweather\b", t):
+        m = re.search(r"weather\s+(?:in|at|for)\s+(.+)", t)
+        city = (m.group(1) if m else CITY).strip()
+        say(f"Checking the skies over {city}...")
+        say(get_weather(city))
+
+    # ---- news ----
+    elif re.search(r"\b(news|headlines|top stories|what's happening)\b", t):
+        headlines = get_top_news()
+        if headlines:
+            say("Here are today's top stories:")
+            for i, h in enumerate(headlines, 1):
+                say(f"{i}. {h}")
+        else:
+            say("I couldn't reach the news feed right now.")
+
+    # ---- reminders ----
+    elif re.match(r"remind me", t):
+        m = re.match(r"remind me to (.+?) in (\d+)\s*(seconds?|minutes?|hours?)", t)
+        m2 = re.match(r"remind me to (.+?) at (\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?$", t)
+        m3 = re.match(r"remind me in (\d+)\s*(seconds?|minutes?|hours?) to (.+)", t)
+        if m:
+            task, n, unit = m.group(1), int(m.group(2)), m.group(3)
+            secs = n * (1 if unit.startswith("sec") else 60 if unit.startswith("min") else 3600)
+            _schedule(task, time.time() + secs)
+            say(f"Reminder set: {task} — in {n} {unit}. (Keep this tab open and I'll alert you.)")
+        elif m2:
+            task, hh, mm, ap = m2.group(1), int(m2.group(2)), int(m2.group(3) or 0), m2.group(4)
+            if ap and ap.startswith("p") and hh < 12:
+                hh += 12
+            if ap and ap.startswith("a") and hh == 12:
+                hh = 0
+            now = datetime.datetime.now()
+            when = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if when <= now:
+                when += datetime.timedelta(days=1)
+            _schedule(task, when.timestamp())
+            say(f"Reminder set: {task} — at {when.strftime('%I:%M %p')}.")
+        elif m3:
+            n, unit, task = int(m3.group(1)), m3.group(2), m3.group(3)
+            secs = n * (1 if unit.startswith("sec") else 60 if unit.startswith("min") else 3600)
+            _schedule(task, time.time() + secs)
+            say(f"Reminder set: {task} — in {n} {unit}.")
+        else:
+            say("How shall I phrase that? Try: 'remind me to call mom in 10 minutes'.")
+
+    elif re.search(r"\b(my reminders|list reminders|show reminders)\b", t):
+        rems = sorted(_load(REMS_F, []), key=lambda r: r["when"])
+        if not rems:
+            say("You have no pending reminders.")
+        else:
+            say(f"You have {len(rems)} reminder(s):")
+            for r in rems:
+                when = datetime.datetime.fromtimestamp(r["when"])
+                say(f"• {r['task']} — {when.strftime('%I:%M %p, %b %d')}")
+
+    # ---- notes ----
+    elif re.match(r"(?:take a note|make a note|add note|note this|note)[:\s]+(.+)", text, flags=re.I):
+        body = re.match(r"(?:take a note|make a note|add note|note this|note)[:\s]+(.+)",
+                        text, flags=re.I).group(1).strip()
+        notes = _load(NOTES_F, [])
+        notes.append({"text": body,
+                      "time": datetime.datetime.now().isoformat(timespec="seconds")})
+        _save(NOTES_F, notes)
+        say("Noted.")
+    elif re.search(r"\b(read|show|list) (my )?notes\b", t):
+        notes = _load(NOTES_F, [])
+        if not notes:
+            say("You have no notes yet.")
+        else:
+            say(f"You have {len(notes)} note(s):")
+            for i, n in enumerate(notes, 1):
+                say(f"{i}. {n['text']}")
+    elif re.search(r"\b(clear|delete) (all )?(my )?notes\b", t):
+        _save(NOTES_F, [])
+        say("All notes erased.")
+
+    # ---- music ----
+    elif re.match(r"(play|put on)\s+(.+)", text, flags=re.I):
+        song = re.match(r"(?:play|put on)\s+(.+)", text, flags=re.I).group(1)
+        song = re.sub(r"\s+on youtube$", "", song, flags=re.I).strip()
+        say(f"Pulling up {song} on YouTube.")
+        open_url("https://www.youtube.com/results?search_query=" + urllib.parse.quote(song),
+                 f"▶ Play {song}")
+
+    # ---- search ----
+    elif re.match(r"(?:search|google|look up|search for|google for)\s+(.+)", text, flags=re.I):
+        q = re.match(r"(?:search|google|look up|search for|google for)\s+(.+)", text,
+                     flags=re.I).group(1).strip()
+        say(f"Searching for {q}.")
+        open_url("https://www.google.com/search?q=" + urllib.parse.quote(q), f"🔍 {q}")
+
+    # ---- desktop-only powers → witty reply ----
+    elif re.search(r"\b(screenshot|volume up|volume down|volume mute|battery|system info|cpu|ram)\b", t):
+        say("Ah — that power belongs to my desktop incarnation, I'm afraid. "
+            "Here on the web I command information and the internet itself. "
+            "The desktop build in my repository can open apps, take screenshots and more.")
+
+    # ---- open websites ----
+    elif re.match(r"open\s+(?:the\s+)?(.+)", t):
+        target = re.match(r"open\s+(?:the\s+)?(.+)", t).group(1).strip()
+        clean = re.sub(r"\s+(website|site|app)$", "", target)
+        if clean in WEBSITES:
+            say(f"Opening {clean}.")
+            open_url(WEBSITES[clean], f"↗ {clean}")
+        elif re.match(r"^[\w\-]+(\.[\w\-]+)+(/\S*)?$", clean):
+            say(f"Opening {clean}.")
+            open_url("https://" + clean, f"↗ {clean}")
+        else:
+            say(f"I don't have '{target}' in my directory. Try 'open youtube', 'open gmail'… "
+                "or teach me by adding it to WEBSITES in web/brain.py.")
+
+    # ---- knowledge patterns ----
+    elif re.match(r"(?:wikipedia|wiki)\s+(.+)", t):
+        topic = re.match(r"(?:wikipedia|wiki)\s+(.+)", t).group(1)
+        say(_knowledge(topic))
+    elif re.match(r"(?:tell me (?:something )?about|know about|information (?:about|on)|explain)\s+(.+?)\??$", t):
+        topic = re.match(r"(?:tell me (?:something )?about|know about|information (?:about|on)|explain)\s+(.+?)\??$", t).group(1)
+        if len(topic.split()) <= 8:
+            say(_knowledge(topic))
+        else:
+            say(_fallback(text))
+    elif re.match(r"(?:who is|who's|who was|what is|what's a|whats a|who are)\s+(.+?)\??$", t):
+        topic = re.match(r"(?:who is|who's|who was|what is|what's a|whats a|who are)\s+(.+?)\??$", t).group(1)
+        if len(topic.split()) <= 8:
+            say(_knowledge(re.sub(r"\?$", "", topic)))
+        else:
+            say(_fallback(text))
+
+    # ---- AI / offline fallback ----
+    else:
+        say(_fallback(text))
+
+    return {"replies": replies, "actions": actions}
+
+
+def _knowledge(topic):
+    summary = wikipedia_summary(topic)
+    if summary:
+        return summary[:450]
+    ans = duckduckgo_answer(topic)
+    return (ans[:450] if ans else f"I couldn't find anything on '{topic}'.")
+
+
+def _fallback(text):
+    reply = AI.answer(text)
+    if reply:
+        return re.sub(r"[*_`#>~]", "", reply).strip()
+    ans = wikipedia_summary(text) or duckduckgo_answer(text)
+    if ans:
+        return ans[:450]
+    return (f"I'm not sure about that yet, {USER_NAME}. Try 'help' to see my commands — "
+            "or set a JARVIS_API_KEY and I'll answer absolutely anything.")
