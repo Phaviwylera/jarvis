@@ -24,7 +24,9 @@ MEM = os.path.join(BASE, "memory")
 os.makedirs(MEM, exist_ok=True)
 NOTES_F = os.path.join(MEM, "notes.json")
 REMS_F = os.path.join(MEM, "reminders.json")
-USER_AGENT = "JARVIS-Web/1.0 (+personal-assistant)"
+# Browser-style UA: some providers sit behind Cloudflare and block script-looking agents.
+USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
 USER_NAME = os.environ.get("USER_NAME", "sir")
 CITY = os.environ.get("CITY", "Chennai")
@@ -69,54 +71,94 @@ SYSTEM_PERSONA = (
 PROVIDER_DEFAULTS = {
     "gemini": {"model": "gemini-3.8-flash",
                "base_url": "https://generativelanguage.googleapis.com/v1beta"},
-    "openai": {"model": "gpt-4o-mini", "base_url": "https://api.openai.com/v1"},
-    "groq":   {"model": "llama-3.3-70b-versatile",
+    "groq":   {"model": "openai/gpt-oss-120b",
                "base_url": "https://api.groq.com/openai/v1"},
+    "openai": {"model": "gpt-4o-mini", "base_url": "https://api.openai.com/v1"},
     "ollama": {"model": "llama3.1", "base_url": "http://localhost:11434/v1"},
 }
+ENV_KEY_NAMES = {"gemini": "GEMINI_API_KEY", "groq": "GROQ_API_KEY", "openai": "OPENAI_API_KEY"}
+PROVIDER_ORDER = ("gemini", "groq", "openai", "ollama")
 
 
 class AIBrain:
+    """Multi-provider AI brain with AUTOMATIC FAILOVER.
+
+    Chain =  primary provider (JARVIS_LLM_PROVIDER + JARVIS_API_KEY)
+          +  every other provider that has a key (GEMINI_/GROQ_/OPENAI_API_KEY)
+          +  local ollama when OLLAMA_HOST is set.
+    If one brain goes down, the next answers — no downtime, no dumb JARVIS.
+    """
+
     def __init__(self):
-        self.provider = (os.environ.get("JARVIS_LLM_PROVIDER") or "gemini").lower()
-        d = PROVIDER_DEFAULTS.get(self.provider, {})
-        self.model = os.environ.get("JARVIS_MODEL") or d.get("model", "")
-        self.base_url = (os.environ.get("JARVIS_BASE_URL")
-                         or d.get("base_url", "")).rstrip("/")
-        self.api_key = os.environ.get("JARVIS_API_KEY", "")
+        self.primary = (os.environ.get("JARVIS_LLM_PROVIDER") or "gemini").lower()
+        self.model_override = os.environ.get("JARVIS_MODEL", "")
         self.history = []
+        self.last_used = None
+        self.chain = []
+        self._add(self.primary, os.environ.get("JARVIS_API_KEY", ""))
+        for name in PROVIDER_ORDER:
+            if name == self.primary:
+                continue
+            key = os.environ.get(ENV_KEY_NAMES.get(name, ""), "")
+            if key:
+                self._add(name, key)
+            elif name == "ollama" and os.environ.get("OLLAMA_HOST"):
+                self._add(name, "")
+
+    def _add(self, name, key):
+        d = PROVIDER_DEFAULTS.get(name)
+        if not d:
+            return
+        model, base = d["model"], d["base_url"]
+        if name == self.primary:
+            model = self.model_override or model
+            base = (os.environ.get("JARVIS_BASE_URL") or base).rstrip("/")
+        self.chain.append({"name": name, "model": model,
+                           "base_url": base, "key": key, "dead": False})
+
+    @staticmethod
+    def _live(e):
+        return (e["key"] or e["name"] == "ollama") and not e["dead"]
 
     @property
     def available(self):
-        return bool(self.api_key) or self.provider == "ollama"
+        return any(self._live(e) for e in self.chain)
+
+    def status(self):
+        live = [e["name"] for e in self.chain if self._live(e)]
+        return "+".join(live) if live else "offline"
 
     def answer(self, question):
         if not self.available:
             return None
         self.history.append({"role": "user", "content": question})
         self.history = self.history[-16:]
-        reply = None
-        for attempt in (1, 2, 3):
-            try:
-                reply = (self._ask_gemini() if self.provider == "gemini"
-                         else self._ask_openai_style())
-                if reply:
-                    break
-            except urllib.error.HTTPError as e:
-                print(f"[ai] {self.provider} attempt {attempt}: HTTP {e.code}")
-                if e.code not in (429, 500, 502, 503, 504):
-                    break                       # auth/bad-request errors won't fix themselves
-            except Exception as e:
-                print(f"[ai] {self.provider} attempt {attempt}: {e}")
-            time.sleep(1.5 * attempt)
-        if reply:
-            self.history.append({"role": "assistant", "content": reply})
-        return reply
+        for attempt in (1, 2):
+            for e in self.chain:
+                if not self._live(e):
+                    continue
+                try:
+                    reply = (self._ask_gemini(e) if e["name"] == "gemini"
+                             else self._ask_openai_style(e))
+                    if reply:
+                        if e["name"] != self.primary:
+                            print(f"[ai] FAILOVER -> answered by {e['name']}")
+                        self.last_used = e["name"]
+                        self.history.append({"role": "assistant", "content": reply})
+                        return reply
+                except urllib.error.HTTPError as err:
+                    print(f"[ai] {e['name']}: HTTP {err.code} (attempt {attempt})")
+                    if err.code in (400, 401, 403, 404):
+                        e["dead"] = True          # auth/model errors won't self-heal
+                except Exception as ex:
+                    print(f"[ai] {e['name']} (attempt {attempt}): {ex}")
+            time.sleep(1.2)
+        return None
 
-    def _ask_gemini(self):
+    def _ask_gemini(self, e):
         convo = "\n".join(("User: " if m["role"] == "user" else "JARVIS: ") + m["content"]
                           for m in self.history)
-        url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
+        url = f"{e['base_url']}/models/{e['model']}:generateContent?key={e['key']}"
         payload = {
             "system_instruction": {"parts": [{"text": SYSTEM_PERSONA.format(user=USER_NAME)}]},
             "contents": [{"role": "user", "parts": [{"text": convo}]}],
@@ -125,13 +167,13 @@ class AIBrain:
         data = http_post_json(url, payload)
         return (data["candidates"][0]["content"]["parts"][0]["text"] or "").strip()
 
-    def _ask_openai_style(self):
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        payload = {"model": self.model,
+    def _ask_openai_style(self, e):
+        headers = {"Authorization": f"Bearer {e['key']}"} if e["key"] else {}
+        payload = {"model": e["model"],
                    "messages": [{"role": "system",
                                  "content": SYSTEM_PERSONA.format(user=USER_NAME)}] + self.history,
                    "temperature": 0.7, "max_tokens": 300}
-        data = http_post_json(f"{self.base_url}/chat/completions", payload, headers=headers)
+        data = http_post_json(f"{e['base_url']}/chat/completions", payload, headers=headers)
         return (data["choices"][0]["message"]["content"] or "").strip()
 
 

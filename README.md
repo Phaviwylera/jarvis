@@ -41,16 +41,23 @@ Deploys straight from this GitHub repo. **Every `git push` auto-redeploys — th
 3. Select the **`jarvis`** repository → **Apply** (Render reads `render.yaml` and builds everything)
 4. When deploy finishes, open your URL: `https://jarvis-xxxx.onrender.com` 🎉
 
-### Unlock the AI brain on the web app (important!)
+### Unlock the AI brain(s) on the web app (important!)
 In Render dashboard → your service → **Environment** → add:
 
-| Key | Value |
-|---|---|
-| `JARVIS_API_KEY` | your Gemini key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
-| `JARVIS_LLM_PROVIDER` | `gemini` *(already set)* |
-| `USER_NAME` | what JARVIS calls you — `sir` / your name |
+| Key | Value | Role |
+|---|---|---|
+| `JARVIS_API_KEY` | your Gemini key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | 🧠 primary brain |
+| `GROQ_API_KEY` | your Groq key from [console.groq.com/keys](https://console.groq.com/keys) | 🛟 backup brain #1 |
+| `OPENAI_API_KEY` | *(optional)* OpenAI key | 🛟 backup brain #2 |
+| `USER_NAME` | what JARVIS calls you — `sir` / your name | 🎩 persona |
 
 Then **Save Changes** (auto-redeploys). Keys live only on the server — never in Git. 🔒
+
+### 🔁 Automatic AI failover (built-in)
+JARVIS keeps a **chain of brains**: Gemini → Groq → OpenAI (any with a key joins automatically).
+If the primary API errors, rate-limits or goes down, the next brain **answers the same request instantly** — you never see a failure. Watch the status pill in the HUD (`GEMINI`, `GROQ`, `GEMINI+GROQ`)
+
+to see which brains are live, and check Render logs for `FAILOVER -> answered by ...` events.
 
 ### Upgrading later (the easy loop you wanted)
 ```bash
@@ -94,12 +101,20 @@ remind me to call mom in 20 minutes
 search best laptops 2026         help    ·    exit
 ```
 
-### 🧠 Give it the AI brain
-`config.json` is created on first run:
+### 🧠 Give it AI brains (with automatic failover)
+`config.json` (created on first run):
 ```jsonc
-"llm": { "provider": "gemini", "api_key": "PASTE-YOUR-KEY" }
+"llm": {
+  "provider": "gemini",
+  "api_key":  "GEMINI-KEY",                 // 🧠 primary
+  "extra_keys": { "groq": "GROQ-KEY",       // 🛟 automatic backups — join the
+                  "openai": "" },           //     chain if the primary fails
+}
 ```
-Free key: [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — or use `groq`, `openai`, or fully-offline `ollama`. Env var `JARVIS_API_KEY` overrides too.
+Free keys: Gemini → [aistudio.google.com/apikey](https://aistudio.google.com/apikey),
+Groq → [console.groq.com/keys](https://console.groq.com/keys).
+Also supported: env vars `JARVIS_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`,
+or fully-offline `ollama` as provider. The startup banner shows the live chain, e.g. `AI: gemini+groq`.
 
 ### ⚙️ Personalize (`config.json`)
 ```jsonc

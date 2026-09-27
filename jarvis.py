@@ -49,7 +49,9 @@ CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 NOTES_PATH = os.path.join(MEMORY_DIR, "notes.json")
 REMINDERS_PATH = os.path.join(MEMORY_DIR, "reminders.json")
 
-USER_AGENT = "JARVIS-Personal-Assistant/1.0 (+https://localhost)"
+# Browser-style UA: providers behind Cloudflare (e.g. Groq) block script-looking agents.
+USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
 # ============================================================================
 #  CONFIGURATION
@@ -72,6 +74,11 @@ DEFAULT_CONFIG = {
         "api_key": "",                  # paste your key here (or set env JARVIS_API_KEY)
         "model": "",                    # empty = sensible default per provider
         "base_url": "",                 # empty = default endpoint per provider
+        "extra_keys": {                 # AUTOMATIC FAILOVER brains used if primary fails
+            "gemini": "",
+            "groq": "",
+            "openai": ""
+        },
         "max_history": 8
     }
 }
@@ -95,6 +102,10 @@ def load_config():
         cfg["llm"]["api_key"] = os.environ["JARVIS_API_KEY"]
     if os.environ.get("JARVIS_LLM_PROVIDER"):
         cfg["llm"]["provider"] = os.environ["JARVIS_LLM_PROVIDER"]
+    for _prov, _env in (("gemini", "GEMINI_API_KEY"), ("groq", "GROQ_API_KEY"),
+                        ("openai", "OPENAI_API_KEY")):
+        if os.environ.get(_env):            # failover keys via environment
+            cfg["llm"].setdefault("extra_keys", {})[_prov] = os.environ[_env]
     return cfg
 
 
@@ -299,15 +310,21 @@ SYSTEM_PERSONA = (
 
 
 class Brain:
-    """LLM-powered answers with graceful offline degradation."""
+    """Multi-provider AI brain with AUTOMATIC FAILOVER.
+
+    Chain =  primary provider (config llm.provider + llm.api_key)
+          +  every provider in llm.extra_keys that has a key
+          +  local ollama when OLLAMA_HOST is set.
+    If one brain goes down, the next answers — automatically.
+    """
 
     PROVIDER_DEFAULTS = {
         "gemini": {"model": "gemini-3.8-flash",
                    "base_url": "https://generativelanguage.googleapis.com/v1beta"},
+        "groq":   {"model": "openai/gpt-oss-120b",
+                   "base_url": "https://api.groq.com/openai/v1"},
         "openai": {"model": "gpt-4o-mini",
                    "base_url": "https://api.openai.com/v1"},
-        "groq":   {"model": "llama-3.3-70b-versatile",
-                   "base_url": "https://api.groq.com/openai/v1"},
         "ollama": {"model": "llama3.1",
                    "base_url": "http://localhost:11434/v1"},
     }
@@ -316,55 +333,76 @@ class Brain:
         self.cfg = cfg
         llm = cfg.get("llm", {})
         self.provider = (llm.get("provider") or "none").lower()
-        d = self.PROVIDER_DEFAULTS.get(self.provider, {})
-        self.model = llm.get("model") or d.get("model", "")
-        self.base_url = (llm.get("base_url") or d.get("base_url", "")).rstrip("/")
-        self.api_key = llm.get("api_key", "")
         self.history = []
+        self.last_used = None
+        self.chain = []
+        if self.provider != "none":
+            self._add(self.provider, llm.get("api_key", ""),
+                      llm.get("model", ""), llm.get("base_url", ""))
+        for name, key in (llm.get("extra_keys", {}) or {}).items():
+            if name != self.provider and key:
+                self._add(name, key)
+        if (self.provider == "ollama" or os.environ.get("OLLAMA_HOST")) and \
+                not any(e["name"] == "ollama" for e in self.chain):
+            self._add("ollama", "")
+
+    def _add(self, name, key, model="", base_url=""):
+        d = self.PROVIDER_DEFAULTS.get(name)
+        if not d:
+            return
+        self.chain.append({"name": name, "model": model or d["model"],
+                           "base_url": (base_url or d["base_url"]).rstrip("/"),
+                           "key": key, "dead": False})
+
+    @staticmethod
+    def _live(e):
+        return (e["key"] or e["name"] == "ollama") and not e["dead"]
 
     @property
     def available(self):
-        if self.provider == "none" or not self.provider:
-            return False
-        if self.provider == "ollama":
-            return True
-        return bool(self.api_key)
+        return any(self._live(e) for e in self.chain)
+
+    def status(self):
+        live = [e["name"] for e in self.chain if self._live(e)]
+        return "+".join(live) if live else "offline"
 
     def answer(self, question):
-        """Return an AI answer, or None if no provider is configured/reachable."""
+        """Try every live provider in the chain until one answers."""
         if not self.available:
             return None
         self.history.append({"role": "user", "content": question})
         max_h = int(self.cfg.get("llm", {}).get("max_history", 8))
         self.history = self.history[-max_h * 2:]
-        reply = None
-        for attempt in (1, 2, 3):
-            try:
-                if self.provider == "gemini":
-                    reply = self._ask_gemini()
-                else:  # openai-compatible (openai, groq, ollama, lm-studio...)
-                    reply = self._ask_openai_compatible()
-                if reply:
-                    break
-            except urllib.error.HTTPError as e:
-                print(f"[brain] {self.provider} attempt {attempt}: HTTP {e.code}")
-                if e.code not in (429, 500, 502, 503, 504):
-                    break
-            except Exception as e:
-                print(f"[brain] {self.provider} attempt {attempt}: {e}")
-            time.sleep(1.5 * attempt)
-        if reply:
-            self.history.append({"role": "assistant", "content": reply})
-        return reply
+        for attempt in (1, 2):
+            for e in self.chain:
+                if not self._live(e):
+                    continue
+                try:
+                    reply = (self._ask_gemini(e) if e["name"] == "gemini"
+                             else self._ask_openai_compatible(e))
+                    if reply:
+                        if e["name"] != self.provider:
+                            print(f"[brain] FAILOVER -> answered by {e['name']}")
+                        self.last_used = e["name"]
+                        self.history.append({"role": "assistant", "content": reply})
+                        return reply
+                except urllib.error.HTTPError as err:
+                    print(f"[brain] {e['name']}: HTTP {err.code} (attempt {attempt})")
+                    if err.code in (400, 401, 403, 404):
+                        e["dead"] = True      # auth/model errors won't self-heal
+                except Exception as ex:
+                    print(f"[brain] {e['name']} (attempt {attempt}): {ex}")
+            time.sleep(1.2)
+        return None
 
     def _persona(self):
         return SYSTEM_PERSONA.format(user=self.cfg.get("user_name", "sir"))
 
-    def _ask_gemini(self):
+    def _ask_gemini(self, e):
         convo = "\n".join(
             ("User: " if m["role"] == "user" else "JARVIS: ") + m["content"]
             for m in self.history)
-        url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
+        url = f"{e['base_url']}/models/{e['model']}:generateContent?key={e['key']}"
         payload = {
             "system_instruction": {"parts": [{"text": self._persona()}]},
             "contents": [{"role": "user", "parts": [{"text": convo}]}],
@@ -373,18 +411,16 @@ class Brain:
         data = http_post_json(url, payload)
         return (data["candidates"][0]["content"]["parts"][0]["text"] or "").strip()
 
-    def _ask_openai_compatible(self):
-        headers = {}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+    def _ask_openai_compatible(self, e):
+        headers = {"Authorization": f"Bearer {e['key']}"} if e["key"] else {}
         payload = {
-            "model": self.model,
+            "model": e["model"],
             "messages": ([{"role": "system", "content": self._persona()}]
                          + self.history),
             "temperature": 0.7,
             "max_tokens": 300,
         }
-        url = f"{self.base_url}/chat/completions"
+        url = f"{e['base_url']}/chat/completions"
         data = http_post_json(url, payload, headers=headers)
         return (data["choices"][0]["message"]["content"] or "").strip()
 
@@ -613,7 +649,7 @@ class Jarvis:
         print("  J.A.R.V.I.S.  —  Just A Rather Very Intelligent System")
         print(f"  v{VERSION}   |   voice: {'ON' if self.voice.enabled else 'OFF'}   "
               f"|   mic: {'ON' if self.ears.ready else 'OFF (typing mode)'}   "
-              f"|   AI: {self.brain.provider if self.brain.available else 'offline'}")
+              f"|   AI: {self.brain.status()}")
         print("  Say or type 'help' to see what I can do. 'exit' quits.")
         print("=" * 60)
         if tod == "working late":

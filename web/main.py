@@ -34,7 +34,9 @@ def events():
 
 @app.get("/api/health")
 def health():
-    return {"status": "online", "ai": brain.AI.provider if brain.AI.available else "offline"}
+    return {"status": "online",
+            "ai": brain.AI.status(),
+            "last_used": brain.AI.last_used}
 
 
 # Static site (must be mounted last so /api routes win)

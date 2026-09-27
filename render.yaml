@@ -20,6 +20,11 @@ services:
         value: sir
       - key: CITY
         value: Chennai
-      # Set this in the Render dashboard (Environment) — NEVER commit keys:
-      - key: JARVIS_API_KEY
+      # Set these in the Render dashboard (Environment) — NEVER commit keys.
+      # Automatic failover: if Gemini fails, Groq answers, then OpenAI.
+      - key: JARVIS_API_KEY        # gemini key (primary brain)
+        sync: false
+      - key: GROQ_API_KEY          # groq key  (backup brain #1)
+        sync: false
+      - key: OPENAI_API_KEY        # openai key (backup brain #2, optional)
         sync: false
