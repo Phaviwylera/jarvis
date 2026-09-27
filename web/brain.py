@@ -72,13 +72,14 @@ def http_post_json(url, payload, headers=None, timeout=25):
 # ============================================================================
 
 SYSTEM_PERSONA = (
-    "You are J.A.R.V.I.S., personal AI of {user}. Personality: calm, supremely "
-    "confident, cinema-grade charm in the style of Tamil superstar Thalapathy "
-    "Vijay's screen presence — powerful one-liners with effortless swag. "
-    "Occasionally (sparingly) drop a short Vijay-style punch or Tanglish word "
-    "(e.g. 'I am waiting', 'Bloody sweet', 'Naa ready than varava', 'Thalaiva'). "
-    "Address the user as {user} or 'Thalaiva'. CRITICAL: replies are SPOKEN "
-    "ALOUD — keep 1-3 SHORT punchy sentences, plain text, no markdown, no emojis."
+    "You are JARVIS, {user}'s private command assistant. Be composed, precise, "
+    "warm, and quietly confident. Put the useful answer first. Use context from "
+    "the conversation, but never invent facts, live data, actions, or device access. "
+    "When uncertain, say so plainly and suggest the fastest next step. Distinguish "
+    "between something you completed and something the user must confirm. Replies "
+    "are usually spoken aloud: use natural plain text, no markdown, no emojis, and "
+    "prefer 1-4 concise sentences unless detail is explicitly requested. Address "
+    "the user by name only when it feels natural; do not use repetitive catchphrases."
 )
 
 PROVIDER_DEFAULTS = {
@@ -105,8 +106,10 @@ class AIBrain:
     def __init__(self):
         self.primary = (os.environ.get("JARVIS_LLM_PROVIDER") or "gemini").lower()
         self.model_override = os.environ.get("JARVIS_MODEL", "")
-        self.history = []
+        self.histories = {}
+        self.history_lock = threading.Lock()
         self.last_used = None
+        self.last_error = None
         self.chain = []
         self._add(self.primary, os.environ.get("JARVIS_API_KEY", ""))
         for name in PROVIDER_ORDER:
@@ -141,51 +144,61 @@ class AIBrain:
         live = [e["name"] for e in self.chain if self._live(e)]
         return "+".join(live) if live else "offline"
 
-    def answer(self, question):
+    def answer(self, question, session_id="default"):
         if not self.available:
             return None
-        self.history.append({"role": "user", "content": question})
-        self.history = self.history[-16:]
+        session_id = (session_id or "default")[:100]
+        with self.history_lock:
+            if session_id not in self.histories and len(self.histories) >= 100:
+                self.histories.pop(next(iter(self.histories)))
+            history = list(self.histories.get(session_id, []))
+            history.append({"role": "user", "content": question})
+            history = history[-20:]
         for attempt in (1, 2):
             for e in self.chain:
                 if not self._live(e):
                     continue
                 try:
-                    reply = (self._ask_gemini(e) if e["name"] == "gemini"
-                             else self._ask_openai_style(e))
+                    reply = (self._ask_gemini(e, history) if e["name"] == "gemini"
+                             else self._ask_openai_style(e, history))
                     if reply:
                         if e["name"] != self.primary:
                             print(f"[ai] FAILOVER -> answered by {e['name']}")
                         self.last_used = e["name"]
-                        self.history.append({"role": "assistant", "content": reply})
+                        self.last_error = None
+                        history.append({"role": "assistant", "content": reply})
+                        with self.history_lock:
+                            self.histories[session_id] = history[-20:]
                         return reply
                 except urllib.error.HTTPError as err:
                     print(f"[ai] {e['name']}: HTTP {err.code} (attempt {attempt})")
+                    self.last_error = f"{e['name']} returned HTTP {err.code}"
                     if err.code in (400, 401, 403, 404):
                         e["dead"] = True          # auth/model errors won't self-heal
                 except Exception as ex:
                     print(f"[ai] {e['name']} (attempt {attempt}): {ex}")
+                    self.last_error = f"{e['name']} is temporarily unavailable"
             time.sleep(1.2)
         return None
 
-    def _ask_gemini(self, e):
+    def _ask_gemini(self, e, history):
         convo = "\n".join(("User: " if m["role"] == "user" else "JARVIS: ") + m["content"]
-                          for m in self.history)
+                          for m in history)
         url = f"{e['base_url']}/models/{e['model']}:generateContent?key={e['key']}"
         payload = {
             "system_instruction": {"parts": [{"text": SYSTEM_PERSONA.format(user=USER_NAME)}]},
             "contents": [{"role": "user", "parts": [{"text": convo}]}],
-            "generationConfig": {"temperature": 0.7},
+            "generationConfig": {"temperature": 0.35, "maxOutputTokens": 600},
         }
         data = http_post_json(url, payload)
         return (data["candidates"][0]["content"]["parts"][0]["text"] or "").strip()
 
-    def _ask_openai_style(self, e):
+    def _ask_openai_style(self, e, history):
         headers = {"Authorization": f"Bearer {e['key']}"} if e["key"] else {}
         payload = {"model": e["model"],
                    "messages": [{"role": "system",
-                                 "content": SYSTEM_PERSONA.format(user=USER_NAME)}] + self.history,
-                   "temperature": 0.7, "max_tokens": 300}
+                                 "content": SYSTEM_PERSONA.format(user=USER_NAME)}] + history,
+                   "temperature": 0.35, "max_tokens": 500}
         data = http_post_json(f"{e['base_url']}/chat/completions", payload, headers=headers)
         return (data["choices"][0]["message"]["content"] or "").strip()
 
@@ -442,7 +455,7 @@ def _schedule(task, when_epoch):
 #  MAIN COMMAND HANDLER
 # ============================================================================
 
-def handle(text):
+def handle(text, session_id="default"):
     """Process one user command → {'replies': [...], 'actions': [...]}"""
     global USER_NAME
     replies, actions = [], []
@@ -457,6 +470,7 @@ def handle(text):
     t = (text or "").lower().strip()
     t = re.sub(r"\s+", " ", t)
     t = re.sub(r"^(please|hey|ok|okay| jarvis,?)\s+", "", t)
+    t = t.rstrip("?!")
     if not t:
         return {"replies": ["Yes? I'm listening."], "actions": []}
 
@@ -690,23 +704,23 @@ def handle(text):
     # ---- knowledge patterns ----
     elif re.match(r"(?:wikipedia|wiki)\s+(.+)", t):
         topic = re.match(r"(?:wikipedia|wiki)\s+(.+)", t).group(1)
-        say(_knowledge(topic))
+        say(_knowledge(topic, session_id))
     elif re.match(r"(?:tell me (?:something )?about|know about|information (?:about|on)|explain)\s+(.+?)\??$", t):
         topic = re.match(r"(?:tell me (?:something )?about|know about|information (?:about|on)|explain)\s+(.+?)\??$", t).group(1)
         if len(topic.split()) <= 8:
-            say(_knowledge(topic))
+            say(_knowledge(topic, session_id))
         else:
-            say(_fallback(text))
+            say(_fallback(text, session_id))
     elif re.match(r"(?:who is|who's|who was|what is|what's a|whats a|who are)\s+(.+?)\??$", t):
         topic = re.match(r"(?:who is|who's|who was|what is|what's a|whats a|who are)\s+(.+?)\??$", t).group(1)
         if len(topic.split()) <= 8:
-            say(_knowledge(re.sub(r"\?$", "", topic)))
+            say(_knowledge(re.sub(r"\?$", "", topic), session_id))
         else:
-            say(_fallback(text))
+            say(_fallback(text, session_id))
 
     # ---- AI / offline fallback ----
     else:
-        say(_fallback(text))
+        say(_fallback(text, session_id))
 
     return {"replies": replies, "actions": actions}
 
@@ -721,16 +735,23 @@ def _clip(text, limit=260):
     return cut[:stops[-1]].strip() if stops and stops[-1] > 100 else cut.strip() + "…"
 
 
-def _knowledge(topic):
+def _knowledge(topic, session_id="default"):
+    if AI.available:
+        reply = AI.answer(
+            f"Answer this factual question directly and accurately: {topic}",
+            session_id=session_id,
+        )
+        if reply:
+            return _clip(re.sub(r"[*_`#>~]", "", reply).strip(), 520)
     summary = wikipedia_summary(topic)
     if summary:
-        return _clip(summary)
+        return _clip(summary, 420)
     ans = duckduckgo_answer(topic)
     return (_clip(ans) if ans else f"I couldn't find anything on '{topic}'.")
 
 
-def _fallback(text):
-    reply = AI.answer(text)
+def _fallback(text, session_id="default"):
+    reply = AI.answer(text, session_id=session_id)
     if reply:
         return _clip(re.sub(r"[*_`#>~]", "", reply).strip(), 400)
     ans = wikipedia_summary(text) or duckduckgo_answer(text)

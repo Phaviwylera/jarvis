@@ -301,14 +301,14 @@ def http_post_json(url, payload, headers=None, timeout=25):
 # ============================================================================
 
 SYSTEM_PERSONA = (
-    "You are J.A.R.V.I.S., personal AI of {user}. Personality: calm, supremely "
-    "confident, cinema-grade charm in the style of Tamil superstar Thalapathy "
-    "Vijay's screen presence — powerful one-liners with effortless swag. "
-    "Occasionally (sparingly) drop a short Vijay-style punch or Tanglish word "
-    "(e.g. 'I am waiting', 'Bloody sweet', 'Naa ready than varava', 'Thalaiva'). "
-    "Address the user as {user} or 'Thalaiva'. IMPORTANT: replies are SPOKEN "
-    "ALOUD — keep to 1-3 SHORT punchy sentences, plain text, no markdown, emojis "
-    "or symbols."
+    "You are JARVIS, {user}'s private command assistant. Be composed, precise, "
+    "warm, and quietly confident. Put the useful answer first. Use conversation "
+    "context, but never invent facts, live data, actions, or device access. When "
+    "uncertain, say so plainly and suggest the fastest next step. Distinguish "
+    "between something you completed and something the user must confirm. Replies "
+    "are spoken aloud: use natural plain text, no markdown or emojis, and prefer "
+    "1-4 concise sentences unless detail is requested. Use the user's name only "
+    "when it feels natural; do not repeat catchphrases."
 )
 
 
@@ -777,6 +777,7 @@ class Jarvis:
         t = text.lower().strip()
         t = re.sub(r"\s+", " ", t)
         t = re.sub(r"^(please|hey|ok|okay)\s+", "", t)
+        t = t.rstrip("?!")
 
         # --- exit -------------------------------------------------------------
         if t in ("exit", "quit", "goodbye", "bye", "power down", "shut down jarvis",
@@ -905,10 +906,18 @@ class Jarvis:
             return self.cmd_wikipedia(m.group(1))
         m = re.match(r"(?:tell me (?:something )?about|know about|information (?:about|on)|explain)\s+(.+?)\??$", t)
         if m and len(m.group(1).split()) <= 8:
+            reply = self.brain.answer(text)
+            if reply:
+                self.say(clean_for_speech(reply))
+                return True
             return self.cmd_wikipedia(m.group(1))
         m = re.match(r"(?:who is|who's|who was|what is|what's a|whats a|who are)\s+(.+?)\??$", t)
         if m and len(m.group(1).split()) <= 8:
             topic = re.sub(r"\?$", "", m.group(1))
+            reply = self.brain.answer(text)
+            if reply:
+                self.say(clean_for_speech(reply))
+                return True
             return self.cmd_wikipedia(topic)
 
         # --- music ------------------------------------------------------------

@@ -6,6 +6,8 @@ Serves the HUD interface + command API. Run:
 """
 
 import os
+import time
+import uuid
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +17,7 @@ from pydantic import BaseModel
 
 import brain
 
-app = FastAPI(title="J.A.R.V.I.S. Web", version="1.4")
+app = FastAPI(title="J.A.R.V.I.S. Web", version="2.0")
 
 # Allow the HUD hosted anywhere (Netlify, Render, cloudflared…) to call this brain.
 app.add_middleware(
@@ -30,11 +32,21 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 
 class Command(BaseModel):
     text: str
+    session_id: str | None = None
 
 
 @app.post("/api/command")
 def command(cmd: Command):
-    return brain.handle(cmd.text)
+    started = time.perf_counter()
+    session_id = cmd.session_id or str(uuid.uuid4())
+    result = brain.handle(cmd.text, session_id=session_id)
+    result["meta"] = {
+        "session_id": session_id,
+        "latency_ms": round((time.perf_counter() - started) * 1000),
+        "provider": brain.AI.last_used or "local",
+        "ai_status": brain.AI.status(),
+    }
+    return result
 
 
 @app.get("/api/events")
@@ -47,6 +59,7 @@ def health():
     return {"status": "online",
             "ai": brain.AI.status(),
             "last_used": brain.AI.last_used,
+            "last_error": brain.AI.last_error,
             "keys_present": {                      # masked diagnostic: names only, never values
                 "JARVIS_API_KEY": bool(os.environ.get("JARVIS_API_KEY")),
                 "GROQ_API_KEY": bool(os.environ.get("GROQ_API_KEY")),

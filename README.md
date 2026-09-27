@@ -1,5 +1,9 @@
 # J.A.R.V.I.S. — Just A Rather Very Intelligent System 🎙️
 
+> **v2 command interface:** a cleaner cinematic HUD, direct voice mode, optional
+> wake-word listening, visible brain/latency status, session-scoped conversation
+> context, and more accurate AI-first answers for open-ended questions.
+
 Your personal AI assistant — **two bodies, one brain**:
 
 - 🖥️ **Desktop app** — full voice control (mic in / voice out), opens apps, screenshots, volume, battery…
