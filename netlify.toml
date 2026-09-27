@@ -1,0 +1,19 @@
+# ================================================================
+#  J.A.R.V.I.S. on Netlify = the FACE 🎭 (static HUD only)
+#  The BRAIN 🧠 (Python FastAPI) runs on Render — see render.yaml.
+#
+#  Setting `base` to web/static stops Netlify from detecting the
+#  desktop requirements.txt (PyAudio etc. can't — and needn't —
+#  build here; the browser handles voice itself).
+# ================================================================
+[build]
+  base = "web/static"
+  publish = "."
+  command = "echo 'JARVIS HUD static build OK — brain lives on Render'"
+
+# Nice clean headers for the HUD
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    Referrer-Policy = "no-referrer-when-downgrade"

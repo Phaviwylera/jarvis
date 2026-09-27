@@ -8,13 +8,23 @@ Serves the HUD interface + command API. Run:
 import os
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import brain
 
-app = FastAPI(title="J.A.R.V.I.S. Web", version="1.0")
+app = FastAPI(title="J.A.R.V.I.S. Web", version="1.4")
+
+# Allow the HUD hosted anywhere (Netlify, Render, cloudflared…) to call this brain.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 BASE = os.path.dirname(os.path.abspath(__file__))
 
 

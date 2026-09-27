@@ -161,6 +161,12 @@
   <div class="notice" id="micNotice">
     🚫 <b>Microphone access was blocked.</b> Click the 🔒 icon in your address bar → allow <b>Microphone</b> → reload.
   </div>
+  <div class="notice" id="apiNotice">
+    🧠 <b>HUD online — brain not linked yet.</b> This host serves only JARVIS's face; his mind runs on your
+    <b>Render</b> server. <b>One-time link:</b> tap the ⚙️ button below and paste your Render URL
+    (e.g. <code>https://jarvis-xxxx.onrender.com</code>) — it is saved forever.
+    You can also open this page once with <code>?api=YOUR-RENDER-URL</code>.
+  </div>
 
   <div class="reactor-zone" id="rz">
     <div class="ring r3"></div><div class="ring r2"></div><div class="ring r1"></div>
@@ -186,9 +192,10 @@
     <button class="cbtn" id="loopbtn" title="Always-on listening on/off">🔁</button>
     <button class="cbtn" id="micbtn" title="Listen now">🎤</button>
     <button class="cbtn" id="sndbtn" title="Toggle voice replies">🔊</button>
+    <button class="cbtn" id="apibtn" title="Link the brain (backend URL)">⚙️</button>
     <button class="cbtn" id="send" title="Send">➤</button>
   </div>
-  <footer>ARC REACTOR CORE · WAKE-WORD INTERFACE · v1.3</footer>
+  <footer>ARC REACTOR CORE · WAKE-WORD INTERFACE · v1.4</footer>
 </div>
 
 <script>
@@ -208,6 +215,18 @@ const SELF_URL = location.href;
 const ft = document.getElementById('fulltab'); if(ft) ft.href = SELF_URL;
 if(window.self !== window.top) $('#iframeNotice').classList.add('show');
 
+/* ───────────── brain link: separate host (Netlify face + Render brain) ─────────────
+   Priority: ?api=URL  →  localStorage  →  same-origin (empty = one-box deploy)   */
+const API = (function(){
+  const q = new URLSearchParams(location.search).get('api');
+  if(q){ localStorage.setItem('jarvis_api', q.replace(/\/+$/,'')); return localStorage.getItem('jarvis_api'); }
+  return (localStorage.getItem('jarvis_api') || '').replace(/\/+$/,'');
+})();
+(function apiNoticeCheck(){
+  const host = location.hostname;
+  if(!API && /\.(netlify\.app|netlify\.live)$/.test(host)) $('#apiNotice').classList.add('show');
+})();
+
 /* ───────────── starfield / clock / health ───────────── */
 const cv = $('#stars'), cx = cv.getContext('2d'); let stars = [];
 function starsInit(){ cv.width = innerWidth; cv.height = innerHeight;
@@ -220,11 +239,12 @@ addEventListener('resize', starsInit); starsInit();
 setInterval(()=>{ $('#clock').textContent = new Date().toLocaleTimeString('en-IN',{hour12:true}).toUpperCase(); },1000);
 
 async function api(path, opts){
-  try{ return await fetch(path, opts); }
+  const url = API + path;
+  try{ return await fetch(url, opts); }
   catch(e){
     statusEl.textContent = '⟳ RECONNECTING…';
     await new Promise(r=>setTimeout(r, 1800));
-    try{ const r2 = await fetch(path, opts); statusEl.textContent=''; setStatus(); return r2; }
+    try{ const r2 = await fetch(url, opts); statusEl.textContent=''; setStatus(); return r2; }
     catch(e2){ throw e2; }
   }
 }
@@ -409,8 +429,18 @@ $('#core').onclick = ()=>{ userGestureAt=Date.now();
 $('#micbtn').onclick = ()=> startListen();
 
 /* ───────────── reminders polling ───────────── */
-setInterval(async ()=>{ try{ const r = await fetch('/api/events'); const d = await r.json();
+setInterval(async ()=>{ try{ const r = await fetch(API + '/api/events'); const d = await r.json();
   for(const ev of d.events||[]){ addMsg('jarvis', ev); speak(ev); } }catch(e){} }, 5000);
+
+/* ───────────── ⚙️ link/unlink brain ───────────── */
+$('#apibtn').onclick = ()=>{
+  const cur = localStorage.getItem('jarvis_api') || '';
+  const v = prompt('🧠 JARVIS brain URL — your Render service address\n(e.g. https://jarvis-xxxx.onrender.com)\n\nLeave EMPTY and press OK to unlink (same-host mode):', cur);
+  if(v === null) return;
+  const clean = v.trim().replace(/\/+$/,'');
+  if(clean) localStorage.setItem('jarvis_api', clean); else localStorage.removeItem('jarvis_api');
+  location.search = '';      // reload clean & linked
+};
 
 /* ───────────── activation flow (the ONE tap browsers require) ───────────── */
 function activate(){
