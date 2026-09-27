@@ -42,12 +42,13 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 APP_NAME = "J.A.R.V.I.S."
-VERSION = "1.0"
+VERSION = "2.1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MEMORY_DIR = os.path.join(BASE_DIR, "memory")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 NOTES_PATH = os.path.join(MEMORY_DIR, "notes.json")
 REMINDERS_PATH = os.path.join(MEMORY_DIR, "reminders.json")
+MEMORY_PATH = os.path.join(MEMORY_DIR, "longterm.json")
 
 # Browser-style UA: providers behind Cloudflare (e.g. Groq) block script-looking agents.
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -355,11 +356,12 @@ class Brain:
             return
         self.chain.append({"name": name, "model": model or d["model"],
                            "base_url": (base_url or d["base_url"]).rstrip("/"),
-                           "key": key, "dead": False})
+                           "key": key, "dead_until": 0.0, "fails": 0})
 
     @staticmethod
     def _live(e):
-        return (e["key"] or e["name"] == "ollama") and not e["dead"]
+        # circuit breaker with auto half-open retry — a provider rests, never dies
+        return (e["key"] or e["name"] == "ollama") and time.time() >= e.get("dead_until", 0)
 
     @property
     def available(self):
@@ -369,42 +371,58 @@ class Brain:
         live = [e["name"] for e in self.chain if self._live(e)]
         return "+".join(live) if live else "offline"
 
-    def answer(self, question):
-        """Try every live provider in the chain until one answers."""
+    def answer(self, question, augment=""):
+        """Try every live provider in the chain until one answers.
+        augment: short RAG context on the outbound prompt only (never stored).
+        Old turns are compacted to keep token use lean."""
         if not self.available:
             return None
         self.history.append({"role": "user", "content": question})
         max_h = int(self.cfg.get("llm", {}).get("max_history", 8))
         self.history = self.history[-max_h * 2:]
+        out = [dict(m) for m in self.history]
+        for m in out[:-1]:
+            if len(m["content"]) > 200:
+                m["content"] = m["content"][:200].rstrip() + "…"
+        if augment:
+            out[-1]["content"] += augment
         for attempt in (1, 2):
             for e in self.chain:
                 if not self._live(e):
                     continue
                 try:
-                    reply = (self._ask_gemini(e) if e["name"] == "gemini"
-                             else self._ask_openai_compatible(e))
+                    reply = (self._ask_gemini(e, out) if e["name"] == "gemini"
+                             else self._ask_openai_compatible(e, out))
                     if reply:
                         if e["name"] != self.provider:
                             print(f"[brain] FAILOVER -> answered by {e['name']}")
                         self.last_used = e["name"]
+                        e["fails"] = 0
+                        e["dead_until"] = 0.0
+                        self.tokens_est = getattr(self, "tokens_est", 0) + \
+                            (sum(len(m["content"]) for m in out) + len(reply)) // 4
                         self.history.append({"role": "assistant", "content": reply})
                         return reply
                 except urllib.error.HTTPError as err:
                     print(f"[brain] {e['name']}: HTTP {err.code} (attempt {attempt})")
                     if err.code in (400, 401, 403, 404):
-                        e["dead"] = True      # auth/model errors won't self-heal
+                        e["fails"] += 1
+                        e["dead_until"] = time.time() + min(900, 120 * e["fails"])
+                    elif err.code in (408, 409, 425, 429, 500, 502, 503, 504):
+                        e["dead_until"] = time.time() + 45
                 except Exception as ex:
                     print(f"[brain] {e['name']} (attempt {attempt}): {ex}")
+                    e["dead_until"] = time.time() + 30
             time.sleep(1.2)
         return None
 
     def _persona(self):
         return SYSTEM_PERSONA.format(user=self.cfg.get("user_name", "sir"))
 
-    def _ask_gemini(self, e):
+    def _ask_gemini(self, e, hist):
         convo = "\n".join(
             ("User: " if m["role"] == "user" else "JARVIS: ") + m["content"]
-            for m in self.history)
+            for m in hist)
         url = f"{e['base_url']}/models/{e['model']}:generateContent?key={e['key']}"
         payload = {
             "system_instruction": {"parts": [{"text": self._persona()}]},
@@ -414,12 +432,12 @@ class Brain:
         data = http_post_json(url, payload)
         return (data["candidates"][0]["content"]["parts"][0]["text"] or "").strip()
 
-    def _ask_openai_compatible(self, e):
+    def _ask_openai_compatible(self, e, hist):
         headers = {"Authorization": f"Bearer {e['key']}"} if e["key"] else {}
         payload = {
             "model": e["model"],
             "messages": ([{"role": "system", "content": self._persona()}]
-                         + self.history),
+                         + hist),
             "temperature": 0.7,
             "max_tokens": 300,
         }
@@ -465,6 +483,353 @@ def duckduckgo_answer(query):
         return data.get("AbstractText") or None
     except Exception:
         return None
+
+
+# ============================================================================
+#  SENTINEL services — translate · define · convert · prices · memory (RAG)
+# ============================================================================
+
+_QUICK_CACHE = {}
+
+
+def _quick(bucket, ttl, fetch):
+    item = _QUICK_CACHE.get(bucket)
+    if item and time.time() - item[0] < ttl:
+        return item[1]
+    try:
+        data = fetch()
+    except Exception:
+        return None
+    _QUICK_CACHE[bucket] = (time.time(), data)
+    return data
+
+
+LANGS = {"tamil": "ta", "hindi": "hi", "telugu": "te", "malayalam": "ml", "kannada": "kn",
+         "bengali": "bn", "urdu": "ur", "marathi": "mr", "gujarati": "gu", "punjabi": "pa",
+         "english": "en", "french": "fr", "german": "de", "spanish": "es", "italian": "it",
+         "portuguese": "pt", "dutch": "nl", "russian": "ru", "arabic": "ar", "turkish": "tr",
+         "japanese": "ja", "korean": "ko", "chinese": "zh-CN", "thai": "th", "vietnamese": "vi"}
+
+
+def translate_text(text, lang):
+    dest = LANGS.get((lang or "").lower().strip(), (lang or "en").strip())
+    try:
+        q = urllib.parse.urlencode({"client": "gtx", "sl": "auto", "tl": dest,
+                                    "dt": "t", "q": text})
+        data = json.loads(http_get(f"https://translate.googleapis.com/translate_a/single?{q}"))
+        out = "".join(seg[0] for seg in data[0] if seg and seg[0])
+        return out or None
+    except Exception:
+        return None
+
+
+def dictionary_define(word):
+    try:
+        data = http_get_json(
+            f"https://api.dictionaryapi.dev/api/v2/entries/en/{urllib.parse.quote(word)}")
+        entry = data[0]
+        lines = []
+        for meaning in entry.get("meanings", [])[:2]:
+            pos = meaning.get("partOfSpeech", "")
+            for d in meaning.get("definitions", [])[:2]:
+                defn = (d.get("definition") or "").strip()
+                if defn:
+                    lines.append(f"[{pos}] {defn}")
+        if lines:
+            return (entry.get("word", word).capitalize(), lines)
+    except Exception:
+        pass
+    try:                                 # fallback: DuckDuckGo's definition layer
+        ans = duckduckgo_answer(f"{word} meaning")
+        if ans:
+            return (word.capitalize(), [ans[:240]])
+    except Exception:
+        pass
+    return None
+
+
+_UNIT_BASES = {
+    "len": {"km": 1000, "kilometer": 1000, "kilometers": 1000, "m": 1, "meter": 1, "meters": 1,
+            "cm": .01, "mm": .001, "mile": 1609.34, "miles": 1609.34, "feet": .3048,
+            "foot": .3048, "ft": .3048, "inch": .0254, "inches": .0254, "yard": .9144, "yards": .9144},
+    "mass": {"kg": 1000, "g": 1, "gram": 1, "grams": 1, "lb": 453.592, "lbs": 453.592,
+             "pound": 453.592, "pounds": 453.592, "oz": 28.3495, "ounce": 28.3495,
+             "ounces": 28.3495, "stone": 6350.29, "tonne": 1e6, "tonnes": 1e6},
+    "vol": {"l": 1, "liter": 1, "liters": 1, "litre": 1, "litres": 1, "ml": .001,
+            "gallon": 3.78541, "gallons": 3.78541, "pint": .473176, "pints": .473176,
+            "cup": .24, "cups": .24},
+    "data": {"gb": 1024, "mb": 1, "kb": .0009765625, "tb": 1048576},
+}
+
+
+def convert_units(amount, frm, to):
+    frm, to = frm.lower(), to.lower()
+    if frm in ("c", "celsius", "f", "fahrenheit", "farenheit", "kelvin") or \
+       to in ("c", "celsius", "f", "fahrenheit", "farenheit", "kelvin"):
+        c = amount if frm in ("c", "celsius") else (amount - 32) * 5 / 9 if frm not in ("kelvin",) \
+            else amount - 273.15
+        if to in ("c", "celsius"):
+            return f"{round(c, 2)}°C"
+        if to in ("f", "fahrenheit", "farenheit"):
+            return f"{round(c * 9 / 5 + 32, 2)}°F"
+        return f"{round(c + 273.15, 2)} K"
+    for table in _UNIT_BASES.values():
+        if frm in table and to in table:
+            return f"{round(amount * table[frm] / table[to], 4):g} {to}"
+    return None
+
+
+CURRENCIES = {"usd", "inr", "eur", "gbp", "jpy", "sar", "aed", "aud", "cad", "cny",
+              "sgd", "chf", "krw", "myr", "thb", "vnd", "brl", "zar", "nok", "sek"}
+
+
+def currency_convert(amount, frm, to):
+    frm, to = frm.lower(), to.lower()
+    if frm not in CURRENCIES or to not in CURRENCIES:
+        return None
+
+    def _fetch():
+        data = http_get_json(f"https://open.er-api.com/v6/latest/{frm.upper()}", timeout=10)
+        return data["rates"].get(to.upper())
+    rate = _quick(f"rates:{frm}", 6 * 3600, _fetch)
+    if not rate:
+        return None
+    return f"{amount:g} {frm.upper()} is roughly {round(amount * rate, 2)} {to.upper()}."
+
+
+COINS = {"bitcoin": "bitcoin", "btc": "bitcoin", "ethereum": "ethereum", "eth": "ethereum",
+         "dogecoin": "dogecoin", "doge": "dogecoin", "solana": "solana", "sol": "solana",
+         "cardano": "cardano", "ada": "cardano", "ripple": "ripple", "xrp": "ripple",
+         "litecoin": "litecoin", "ltc": "litecoin", "binance": "binancecoin", "bnb": "binancecoin"}
+
+
+def crypto_price(coin):
+    cid = COINS.get((coin or "").lower(), "bitcoin")
+
+    def _fetch():
+        u = (f"https://api.coingecko.com/api/v3/simple/price?ids={cid}"
+             "&vs_currencies=usd%2Cinr&include_24hr_change=true")
+        return http_get_json(u, timeout=10)[cid]
+    data = _quick(f"crypto:{cid}", 120, _fetch)
+    if not data:
+        return None
+    chg = data.get("usd_24h_change") or 0
+    arrow = "up" if chg >= 0 else "down"
+    return (f"{cid.capitalize()} is ${data['usd']:,.0f} (₹{data['inr']:,.0f}), "
+            f"{arrow} {abs(chg):.1f}% in 24 hours.")
+
+
+def _yahoo_quote(symbol):
+    try:
+        u = ("https://query1.finance.yahoo.com/v8/finance/chart/" +
+             urllib.parse.quote(symbol) + "?range=1d&interval=1d")
+        meta = http_get_json(u, timeout=10)["chart"]["result"][0]["meta"]
+        price = meta.get("regularMarketPrice")
+        prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+        if price and prev:
+            return price, (price - prev) / prev * 100
+    except Exception:
+        pass
+    return None
+
+
+def market_snapshot():
+    out = []
+    for sym, name in (("^NSEI", "NIFTY 50"), ("^BSESN", "SENSEX"), ("INR=X", "USD to INR")):
+        q = _quick(f"mkt:{sym}", 300, lambda s=sym: _yahoo_quote(s))
+        if q:
+            out.append(f"{name}: {q[0]:,.2f} ({'+' if q[1] >= 0 else ''}{q[1]:.2f}%)")
+    return out or None
+
+
+def get_forecast(city):
+    try:
+        data = http_get_json(f"https://wttr.in/{urllib.parse.quote(city)}?format=j1")
+        days = data.get("weather", [])[1:4]
+        if not days:
+            return None
+        lines = [f"Forecast for {(city or 'Chennai').title()}:"]
+        for d in days:
+            noon = (d.get("hourly") or [{}])[4]
+            desc = (noon.get("weatherDesc") or [{}])[0].get("value", "")
+            lines.append(f"{d['date'][5:]}: {d['mintempC']} to {d['maxtempC']}°C, {desc.lower()}")
+        return " ".join(lines)
+    except Exception:
+        return None
+
+
+def shorten_url(url):
+    if not re.match(r"https?://", url):
+        url = "http://" + url
+    try:
+        return http_get("https://tinyurl.com/api-create.php?url=" +
+                        urllib.parse.quote(url, safe="")).decode().strip()
+    except Exception:
+        return None
+
+
+def my_public_ip():
+    try:
+        return http_get("https://api.ipify.org", timeout=8).decode().strip()
+    except Exception:
+        return None
+
+
+QUOTES = [
+    "The best time to plant a tree was twenty years ago. The second best time is now.",
+    "Discipline is choosing what you want most over what you want now.",
+    "It always seems impossible until it's done. — Nelson Mandela",
+    "Whether you think you can or you can't, you're right. — Henry Ford",
+    "Success is not final, failure is not fatal: it is the courage to continue that counts.",
+    "Don't watch the clock; do what it does. Keep going. — Sam Levenson",
+    "Simplicity is the ultimate sophistication. — Leonardo da Vinci",
+    "The only way to do great work is to love what you do. — Steve Jobs",
+]
+
+
+# ---- long-term memory (RAG store) ----
+
+_STOP = set("""a an the is are was were am be been being i me my we our you your he she it his her its
+they them their this that these those what who whom which when where why how for to of in on at by with
+about into over under again further then once here there all any both each few more most other some such
+no nor not only own same so than too very can will just don should now do does did and or but if as at
+have has hadn""".split())
+
+
+def _tok(text):
+    return [w for w in re.findall(r"[a-z0-9']+", (text or "").lower())
+            if w not in _STOP and len(w) > 1]
+
+
+import math as _math
+
+
+def _tfidf_search(query, docs, k=3, min_score=0.10):
+    if not docs:
+        return []
+    corp = [_tok(d) for d in docs] + [_tok(query)]
+    df = {}
+    for doc in corp:
+        for w in set(doc):
+            df[w] = df.get(w, 0) + 1
+    n = len(corp)
+
+    def vec(tokens):
+        if not tokens:
+            return {}
+        tf = {}
+        for w in tokens:
+            tf[w] = tf.get(w, 0) + 1
+        return {w: (c / len(tokens)) * (_math.log(n / (1 + df[w])) + 1)
+                for w, c in tf.items()}
+
+    qv = vec(corp[-1])
+    qn = _math.sqrt(sum(v * v for v in qv.values())) or 1.0
+    scored = []
+    for i, tokens in enumerate(corp[:-1]):
+        dv = vec(tokens)
+        dot = sum(qv[w] * dw for w, dw in dv.items() if w in qv)
+        score = dot / ((_math.sqrt(sum(v * v for v in dv.values())) or 1.0) * qn)
+        if score >= min_score:
+            scored.append((round(score, 3), i))
+    scored.sort(reverse=True)
+    return scored[:k]
+
+
+def _load_tiny(path, default):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def _save_tiny(path, data):
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)               # atomic write
+    except Exception as e:
+        print(f"[memory] {e}")
+
+
+def memory_all():
+    return _load_tiny(MEMORY_PATH, [])
+
+
+def memory_add(fact):
+    fact = fact.strip().rstrip(".")
+    if len(fact) < 3:
+        return False
+    low = fact.lower()
+    mems = memory_all()
+    for m in mems:
+        if low == m["text"].lower():
+            return None
+    mems.append({"text": fact, "time": datetime.datetime.now().isoformat(timespec="seconds")})
+    if len(mems) > 500:
+        mems = mems[-500:]
+    _save_tiny(MEMORY_PATH, mems)
+    return True
+
+
+def memory_forget(query):
+    mems = memory_all()
+    if not mems:
+        return None
+    hits = _tfidf_search(query.strip(), [m["text"] for m in mems], k=1, min_score=0.15)
+    if not hits:
+        return None
+    gone = mems.pop(hits[0][1])
+    _save_tiny(MEMORY_PATH, mems)
+    return gone["text"]
+
+
+def memory_search(query, k=3):
+    docs = [m["text"] for m in memory_all()]
+    docs += [nt["text"] for nt in _load_tiny(NOTES_PATH, [])[-30:]]
+    return [(score, docs[i]) for score, i in _tfidf_search(query, docs, k=k)]
+
+
+_RAG_SKIP = re.compile(r"\b(remember|forget|recall|memori[sz]e|memories)\b", re.I)
+
+
+def rag_augment(question, available, budget=380):
+    """Top-3 user facts under a hard char budget — RAG without the price tag."""
+    if not available or _RAG_SKIP.search(question) or len(_tok(question)) < 2:
+        return ""
+    hits = memory_search(question, k=3)
+    if not hits or hits[0][0] < 0.14:
+        return ""
+    facts, used = [], 0
+    for score, text in hits:
+        if score < 0.12:
+            continue
+        frag = text[:140]
+        if used + len(frag) > budget:
+            break
+        facts.append(frag)
+        used += len(frag)
+    return ("\nUser facts you may rely on (answer personally and briefly): "
+            + " | ".join(facts)) if facts else ""
+
+
+def summarize_text(text, brain):
+    if brain.available:
+        reply = brain.answer("Summarize this in two short sentences:\n\n" + text[:2000])
+        if reply:
+            return reply[:320]
+    sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if len(s.strip()) > 20]
+    if len(sents) <= 2:
+        return text[:300]
+    freq = {}
+    for s in sents:
+        for w in set(_tok(s)):
+            freq[w] = freq.get(w, 0) + 1
+    scored = sorted(((sum(freq.get(w, 0) for w in _tok(s)), i) for i, s in enumerate(sents)),
+                    reverse=True)[:2]
+    return " ".join(sents[i] for _, i in sorted(scored, key=lambda x: x[1]))[:320]
 
 
 def get_weather(city):
@@ -799,6 +1164,15 @@ class Jarvis:
             return True
 
         # --- identity / small talk -------------------------------------------
+        # --- translate (FIRST: phrase may contain small-talk words itself) -----
+        m = re.match(r"translate[:\s]+(.+)\s+(?:to|into|in)\s+([a-z]{2,12})$", text, flags=re.I)
+        if m:
+            src, lang = m.group(1).strip(), m.group(2).lower()
+            self.say(f"Translating to {lang.title()}…")
+            out = translate_text(src, lang)
+            self.say(out if out else "The translation service is unreachable right now.")
+            return True
+
         if re.search(r"\b(who are you|your name|about yourself)\b", t):
             self.say("I am JARVIS — Just A Rather Very Intelligent System. "
                      f"Your personal assistant, at your service, {self.name}.")
@@ -880,6 +1254,15 @@ class Jarvis:
             self.say("All notes erased.")
             return True
 
+        # --- forecast -------------------------------------------------------
+        if re.search(r"\b(weather forecast|forecast|weekly weather)\b", t) or \
+                (re.search(r"\bweather\b", t) and "tomorrow" in t):
+            mm = re.search(r"(?:in|at|for)\s+([a-z .\-]{2,30}?)(?:\s+(?:tomorrow|this week))?$", t)
+            city = (mm.group(1).strip() if mm else self.cfg.get("city", "Chennai")) or \
+                self.cfg.get("city", "Chennai")
+            self.say(get_forecast(city) or f"Forecast unavailable for {city} right now.")
+            return True
+
         # --- weather ----------------------------------------------------------
         m = re.search(r"\bweather(?:\s+(?:in|at|for)\s+(.+))?", t)
         if m:
@@ -906,7 +1289,7 @@ class Jarvis:
             return self.cmd_wikipedia(m.group(1))
         m = re.match(r"(?:tell me (?:something )?about|know about|information (?:about|on)|explain)\s+(.+?)\??$", t)
         if m and len(m.group(1).split()) <= 8:
-            reply = self.brain.answer(text)
+            reply = self.brain.answer(text, augment=rag_augment(text, self.brain.available))
             if reply:
                 self.say(clean_for_speech(reply))
                 return True
@@ -914,7 +1297,7 @@ class Jarvis:
         m = re.match(r"(?:who is|who's|who was|what is|what's a|whats a|who are)\s+(.+?)\??$", t)
         if m and len(m.group(1).split()) <= 8:
             topic = re.sub(r"\?$", "", m.group(1))
-            reply = self.brain.answer(text)
+            reply = self.brain.answer(text, augment=rag_augment(text, self.brain.available))
             if reply:
                 self.say(clean_for_speech(reply))
                 return True
@@ -1010,8 +1393,125 @@ class Jarvis:
                 self.say("Cheeky. Tell me your real name, sir.")
             return True
 
+        # --- dictionary -------------------------------------------------------
+        m = re.match(r"(?:define|meaning of|definition of|what does)\s+([\w'-]+?)(?:\s+mean)?$", t)
+        if m:
+            word = m.group(1)
+            self.say(f"Consulting the lexicon for '{word}'…")
+            res = dictionary_define(word)
+            if res:
+                w, lines = res
+                self.say(f"{w}. " + " ".join(lines[:3]))
+            else:
+                self.say(f"No dictionary entry found for '{word}'.")
+            return True
+
+        # --- convert units / currency ------------------------------------------
+        m = re.match(r"(?:(?:convert|how much is|what(?:'s| is))\s+)?([\d.,]+)\s*([a-z°]+)\s+(?:to|into|in)\s+([a-z]+)$", t, flags=re.I)
+        if m:
+            try:
+                amount = float(m.group(1).replace(",", ""))
+            except ValueError:
+                amount = None
+            frm, to = m.group(2).lower(), m.group(3).lower()
+            if amount is None:
+                self.say("That amount doesn't compute.")
+            else:
+                out = (currency_convert(amount, frm, to) if frm in CURRENCIES or to in CURRENCIES
+                       else convert_units(amount, frm, to))
+                self.say(out or "I can't convert that pair yet.")
+            return True
+
+        # --- crypto / markets ----------------------------------------------------
+        if re.search(r"\b(crypto|bitcoin|btc|ethereum|eth|dogecoin|doge|solana|cardano|ripple|xrp|litecoin|ltc|binance|bnb)\b", t) and \
+                re.search(r"\b(price|rate|value|worth|cost|today)\b", t):
+            mc = re.search(r"\b(bitcoin|btc|ethereum|eth|dogecoin|doge|solana|cardano|ripple|xrp|litecoin|ltc|binance|bnb)\b", t)
+            self.say(crypto_price(mc.group(1) if mc else "bitcoin")
+                     or "Price feed unreachable right now.")
+            return True
+        if re.search(r"\b(nifty|sensex|stock market|share market|markets today|market update)\b", t):
+            lines = market_snapshot()
+            self.say("Market pulse: " + ". ".join(lines) if lines
+                     else "The market feed is unreachable at the moment.")
+            return True
+
+        # --- url shortener / ip --------------------------------------------------
+        m = re.match(r"(?:shorten url|shorten|short url for)\s+(\S+)$", t)
+        if m:
+            short = shorten_url(m.group(1))
+            self.say(f"Short link ready: {short} — copied to your clipboard."
+                     if short else "The link shortener is down right now.")
+            if short:
+                try:
+                    if pyperclip:
+                        pyperclip.copy(short)
+                except Exception:
+                    pass
+            return True
+        if re.search(r"\bmy (public )?ip\b|\bwhat('s| is) my ip\b", t):
+            ip = my_public_ip()
+            self.say(f"Your public IP is {ip}." if ip else "The IP service is unreachable.")
+            return True
+
+        # --- quote / summarize -----------------------------------------------
+        if re.search(r"\b(motivat\w*|inspir\w+|give me a quote|quote of the day)\b|^quote$", t):
+            self.say(random.choice(QUOTES))
+            return True
+        m = re.match(r"(?:summari[sz]e|sum up|tldr|tl;dr)[:\s]+(.+)$", text, flags=re.I)
+        if m:
+            body = m.group(1).strip()
+            self.say(summarize_text(body, self.brain) if len(body) >= 60
+                     else "Give me at least a paragraph to compress.")
+            return True
+
+        # --- long-term memory (RAG) ---------------------------------------------
+        m = re.match(r"(?:remember|memori[sz]e)(?:\s+(?:that|this))?[:\s,]+(.+)$", text, flags=re.I)
+        if m:
+            fact = m.group(1).strip()
+            r = memory_add(fact)
+            if r is True:
+                self.say(f"Locked into long-term memory, {self.name}.")
+            elif r is None:
+                self.say("Already in my memory.")
+            else:
+                self.say("A little too short to store safely.")
+            return True
+        m = re.match(r"(?:forget|erase)(?:\s+(?:that|this|about))?[:\s,]+(.+)$", t)
+        if m:
+            gone = memory_forget(m.group(1))
+            self.say(f"Erased from my memory: '{gone}'." if gone
+                     else "I found no memory like that.")
+            return True
+        m = re.match(r"(?:recall\s+|what do you remember about\s+)(.+)$", t)
+        if m:
+            hits = memory_search(m.group(1), k=3)
+            if hits:
+                self.say("From my memory banks: " + ". ".join(txt for _, txt in hits))
+            else:
+                self.say("Nothing in my memory matches that yet — teach me: remember that …")
+            return True
+        if t in ("my memories", "show my memories", "list my memories", "what do you remember"):
+            mems = memory_all()
+            if not mems:
+                self.say("My long-term memory is empty. Say 'remember that …'.")
+            else:
+                self.say(f"I hold {len(mems)} memories. Latest: "
+                         + ". ".join(mv["text"] for mv in mems[-5:]))
+            return True
+
+        # --- personal memory question ("what is my bike number") -----------------
+        if re.search(r"\bmy\b", t) and re.match(r"(?:what(?:'s| is)?|who(?:'s| is)?|do you know|tell me|where(?:'s| is)?)\b", t):
+            hits = memory_search(t, k=2)
+            if hits and hits[0][0] >= 0.12:
+                self.say("From my memory: " + ". ".join(txt for _, txt in hits[:2]))
+            else:
+                reply = self.brain.answer(text, augment=rag_augment(text, self.brain.available))
+                self.say(clean_for_speech(reply) if reply
+                         else "I have no memory of that yet, " + self.name + ".")
+            return True
+
         # --- AI / fallback ----------------------------------------------------
-        reply = self.brain.answer(text)
+        reply = self.brain.answer(text, augment=rag_augment(text, self.brain.available))
         if reply:
             self.say(clean_for_speech(reply))
             return True
@@ -1043,6 +1543,14 @@ class Jarvis:
   • flip a coin       • play <song> on youtube   • go to sleep (wake-word mode)
   • roll a dice                                    • exit / goodbye
   • calculate 45 * 12 + 5
+  SENTINEL v2.1
+  • translate hello to tamil      • define serendipity     • convert 10 km to miles
+  • 100 usd to inr                • price of bitcoin       • nifty / sensex
+  • weather tomorrow (forecast)   • shorten <url>          • my ip
+  • summarize <long text>         • motivate me
+  LONG-TERM MEMORY (RAG)
+  • remember that <fact>          • recall <topic>         • forget <topic>
+  • my memories                   • ask 'what is my …' and I'll recall it
   ...and anything else — I'll answer with AI if an API key is configured.
 ╚═══════════════════════════════════════════════════════════════════════════════╝
 """

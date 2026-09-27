@@ -1,5 +1,13 @@
 # J.A.R.V.I.S. — Just A Rather Very Intelligent System 🎙️
 
+> **v2.1 SENTINEL:** long-term memory with RAG (say *"remember that …"* and future
+> AI answers use it), a token-efficiency engine (answer cache, compacted history —
+> watch the `≈tok` / `saved` chips), reliability hardening (provider circuit breaker
+> with self-healing cooldowns, atomic memory writes, crash-proof command endpoint),
+> and a new task arsenal: translate (25 languages), dictionary, unit/currency
+> conversion, crypto + NIFTY/SENSEX prices, 3-day forecasts, URL shortener, QR maker,
+> IP lookup, quotes, summarizer, repeat.
+
 > **v2 command interface:** a cleaner cinematic HUD, direct voice mode, optional
 > wake-word listening, visible brain/latency status, session-scoped conversation
 > context, and more accurate AI-first answers for open-ended questions.
@@ -35,6 +43,15 @@ Your personal AI assistant — **two bodies, one brain**:
 | Music on YouTube | ✅ autoplay | ✅ opens player tab |
 | Open apps, screenshots, volume, battery | ✅ | — (browser sandbox) |
 | Open websites / web apps | ✅ | ✅ |
+| 💾 **Long-term memory (RAG)** — `remember that …`, `recall`, `forget`, `my memories`, facts auto-ride future AI answers | ✅ | ✅ |
+| ⚡ **Token efficiency** — 25-min answer cache, compacted history, live `tok`/`saved` telemetry | ✅ | ✅ on-the-wire + HUD chips |
+| 🛡️ **Circuit breaker** — provider rests on errors, auto half-open retry; atomic memory writes | ✅ | ✅ |
+| 🌐 **Translate** — `translate good morning to tamil` (25 languages) | ✅ | ✅ |
+| 📖 **Dictionary** — `define serendipity` | ✅ | ✅ |
+| 📏 **Convert** — `convert 10 km to miles`, `100 usd to inr` | ✅ | ✅ |
+| 💰 **Prices** — `price of bitcoin`, `nifty` / `sensex` | ✅ | ✅ |
+| 🌦️ **3-day forecast** — `weather tomorrow` | ✅ | ✅ |
+| 🔗 **Utils** — `shorten <url>`, `qr for <text>`, `my ip`, `motivate me`, `summarize <text>`, `repeat` | ✅ | ✅ |
 | Works with zero dependencies (text mode) | ✅ | ✅ (stdlib brain) |
 
 ---
