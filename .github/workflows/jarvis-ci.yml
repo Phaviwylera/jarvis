@@ -1,0 +1,56 @@
+# ================================================================
+#  J.A.R.V.I.S. CI — runs on every push (before Render auto-deploys)
+#  Checks:  syntax → desktop smoke test → web server boots & answers
+# ================================================================
+name: JARVIS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Syntax check (all apps)
+        run: python -m py_compile jarvis.py web/brain.py web/main.py
+
+      - name: Desktop assistant — offline command smoke test
+        run: |
+          python - <<'PY'
+          import subprocess, sys
+          cmds = "what time is it\ntell me a joke\ncalculate 45 * 12 + 5\nflip a coin\nexit\n"
+          out = subprocess.run([sys.executable, "jarvis.py", "--text"], input=cmds,
+                               capture_output=True, text=True, timeout=90)
+          text = out.stdout
+          assert "JARVIS offline" in text, text[-800:]
+          assert "545" in text, text[-800:]
+          print("✔ desktop smoke test passed")
+          PY
+
+      - name: Install web deps
+        run: pip install -r web/requirements.txt
+
+      - name: Web app — boots and answers commands
+        run: |
+          cd web
+          uvicorn main:app --host 127.0.0.1 --port 8123 &
+          sleep 5
+          curl -sf http://127.0.0.1:8123/api/health
+          echo
+          curl -sf -X POST http://127.0.0.1:8123/api/command \
+               -H "Content-Type: application/json" -d '{"text":"tell me a joke"}' | grep -q replies
+          curl -sf -X POST http://127.0.0.1:8123/api/command \
+               -H "Content-Type: application/json" -d '{"text":"open youtube"}' | grep -q youtube
+          echo "✔ web smoke test passed"
