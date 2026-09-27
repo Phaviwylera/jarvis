@@ -8,7 +8,7 @@
   :root{
     --cy:#00d9ff; --cy2:#8ff3ff; --cydim:rgba(0,217,255,.25);
     --bg:#020610; --panel:rgba(7,18,35,.78); --line:rgba(0,217,255,.18);
-    --txt:#cfeeff; --warn:#ffb454;
+    --txt:#cfeeff;
   }
   *{margin:0;padding:0;box-sizing:border-box;font-family:'Segoe UI',system-ui,Roboto,Arial,sans-serif}
   html,body{height:100%}
@@ -20,10 +20,8 @@
     background-size:44px 44px;}
   .wrap{position:relative;z-index:2;height:100%;display:flex;flex-direction:column;max-width:860px;margin:0 auto;padding:14px 16px}
 
-  /* ── header ── */
   header{display:flex;align-items:center;justify-content:space-between;gap:10px}
-  .title{font-size:22px;letter-spacing:.42em;font-weight:700;color:var(--cy2);
-         text-shadow:0 0 18px var(--cydim)}
+  .title{font-size:22px;letter-spacing:.42em;font-weight:700;color:var(--cy2);text-shadow:0 0 18px var(--cydim)}
   .title small{display:block;font-size:9px;letter-spacing:.32em;color:#5e9db8;margin-top:2px}
   .hud-right{display:flex;align-items:center;gap:10px;font-size:12px}
   #clock{color:#6fc7e6;letter-spacing:.14em;font-variant-numeric:tabular-nums}
@@ -34,13 +32,11 @@
   .pill.down .dot{background:#ff5d5d;box-shadow:0 0 8px #ff5d5d}
   @keyframes blink{50%{opacity:.35}}
 
-  /* ── notices ── */
   .notice{display:none;margin:8px 0;padding:9px 14px;border-radius:10px;font-size:13px;line-height:1.45;
           background:rgba(255,180,84,.10);border:1px solid rgba(255,180,84,.45);color:#ffd9a3}
   .notice a{color:var(--cy2);font-weight:600}
   .notice.show{display:block;animation:fadeUp .3s ease}
 
-  /* ── arc reactor ── */
   .reactor-zone{position:relative;height:218px;display:flex;align-items:center;justify-content:center;margin:4px 0 2px}
   .ring{position:absolute;border-radius:50%;border:2px solid transparent}
   .r1{width:196px;height:196px;border-top-color:var(--cy);border-right-color:var(--cydim);animation:spin 7s linear infinite}
@@ -62,12 +58,11 @@
   @keyframes pulseL{0%,100%{box-shadow:0 0 24px 4px rgba(0,217,255,.55),0 0 90px 18px rgba(0,217,255,.18)}
                     50%{box-shadow:0 0 40px 12px rgba(0,255,190,.75),0 0 120px 30px rgba(0,255,190,.3)}}
   @keyframes pulseS{0%,100%{transform:scale(1)}50%{transform:scale(1.07)}}
-  #status{text-align:center;font-size:11px;letter-spacing:.28em;color:#58a9c6;margin-bottom:2px;min-height:14px}
-  #interim{text-align:center;font-size:12px;color:#7ff3ff;opacity:.85;min-height:17px;font-style:italic;margin-bottom:4px}
+  #status{text-align:center;font-size:11px;letter-spacing:.26em;color:#58a9c6;margin-bottom:2px;min-height:14px}
+  #interim{text-align:center;font-size:12px;color:#7ff3ff;opacity:.85;min-height:17px;font-style:italic;margin-bottom:4px;transition:opacity .4s}
   .loop-badge{display:none;color:#2bffa8;font-weight:700}
   .loop-badge.on{display:inline}
 
-  /* ── chat ── */
   #chat{flex:1;overflow-y:auto;padding:10px 6px;display:flex;flex-direction:column;gap:9px;
         scrollbar-width:thin;scrollbar-color:var(--cydim) transparent}
   .msg{max-width:82%;padding:10px 14px;border-radius:12px;font-size:14.5px;line-height:1.5;
@@ -83,13 +78,11 @@
          background:rgba(0,217,255,.08);transition:.2s}
   a.chip:hover{background:rgba(0,217,255,.22);box-shadow:0 0 14px var(--cydim)}
 
-  /* ── quick commands ── */
   .chips{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
   .qbtn{padding:7px 13px;font-size:12.5px;color:var(--cy2);background:rgba(0,217,255,.07);
         border:1px solid var(--line);border-radius:18px;cursor:pointer;letter-spacing:.04em;transition:.2s}
   .qbtn:hover{background:rgba(0,217,255,.2);box-shadow:0 0 12px var(--cydim)}
 
-  /* ── input bar ── */
   .bar{display:flex;gap:9px}
   #txt{flex:1;padding:13px 16px;font-size:15px;color:var(--txt);background:var(--panel);
        border:1px solid var(--line);border-radius:12px;outline:none;min-width:0}
@@ -103,12 +96,36 @@
         background:#2bffa8;box-shadow:0 0 8px #2bffa8;animation:blink 1.2s infinite}
   footer{text-align:center;font-size:10px;color:#3d6a80;letter-spacing:.22em;margin-top:8px}
 
-  /* ── boot overlay ── */
-  #boot{position:fixed;inset:0;z-index:50;background:var(--bg);display:flex;align-items:center;
-        justify-content:center;flex-direction:column;gap:18px;transition:opacity .7s ease}
+  /* ── boot & activation overlays ── */
+  #boot,#activate,#rebar{position:fixed;z-index:50;background:var(--bg);display:flex;
+        align-items:center;justify-content:center;flex-direction:column;gap:18px}
+  #boot{inset:0;transition:opacity .7s ease}
   #boot.hide{opacity:0;pointer-events:none}
   #boot h1{font-size:30px;letter-spacing:.5em;color:var(--cy2);text-shadow:0 0 30px var(--cydim);animation:blink 1.4s infinite}
   #bootlog{font-family:Consolas,monospace;font-size:12px;color:#4fb3d4;min-height:110px;white-space:pre;line-height:1.9}
+
+  #activate{inset:0;z-index:60;background:rgba(2,6,16,.94);backdrop-filter:blur(4px);display:none;transition:opacity .5s}
+  #activate.show{display:flex}
+  #activate.hide{opacity:0;pointer-events:none}
+  #activate h2{font-size:17px;letter-spacing:.4em;color:var(--cy2);font-weight:600}
+  #activate p{max-width:480px;text-align:center;font-size:13.5px;color:#8fc3d9;line-height:1.7;padding:0 20px}
+  #activate p b{color:var(--cy2)}
+  #actbtn{width:150px;height:150px;border-radius:50%;cursor:pointer;border:2px solid rgba(0,217,255,.6);
+    background:radial-gradient(circle at 50% 38%,#eaffff 0%,#a9f4ff 18%,#19c8ef 42%,#056b8f 70%,#023448 100%);
+    box-shadow:0 0 30px 8px rgba(0,217,255,.5),0 0 120px 30px rgba(0,217,255,.2);
+    font-size:15px;color:#033;font-weight:700;letter-spacing:.12em;
+    animation:actpulse 1.6s ease-in-out infinite;transition:transform .15s}
+  #actbtn:hover{transform:scale(1.06)}
+  @keyframes actpulse{0%,100%{box-shadow:0 0 30px 8px rgba(0,217,255,.5),0 0 120px 30px rgba(0,217,255,.18)}
+                      50%{box-shadow:0 0 55px 18px rgba(0,255,200,.65),0 0 160px 45px rgba(0,255,200,.28)}}
+  #actbtn .ico{font-size:40px;display:block;margin-bottom:6px}
+
+  #rebar{display:none;inset:auto 0 auto 0;top:0;height:46px;flex-direction:row;z-index:55;
+         background:rgba(3,10,22,.96);border-bottom:1px solid var(--line);gap:10px;font-size:13px}
+  #rebar.show{display:flex}
+  #rebar button{padding:7px 16px;border-radius:18px;border:1px solid #2bffa8;background:rgba(43,255,168,.12);
+        color:#7dffc9;font-size:13px;cursor:pointer;letter-spacing:.06em}
+
   @media (max-width:560px){ .title{font-size:15px;letter-spacing:.26em} .msg{max-width:92%} #clock{display:none} }
 </style>
 </head>
@@ -116,9 +133,19 @@
 <canvas id="stars"></canvas>
 <div class="grid"></div>
 
-<div id="boot">
-  <h1>J.A.R.V.I.S.</h1>
-  <div id="bootlog"></div>
+<div id="boot"><h1>J.A.R.V.I.S.</h1><div id="bootlog"></div></div>
+
+<div id="rebar">
+  <span>🎙️ Voice control paused</span>
+  <button id="rebarBtn">⚡ TAP TO RESUME LISTENING</button>
+</div>
+
+<div id="activate">
+  <h2>TAP TO ACTIVATE</h2>
+  <button id="actbtn"><span class="ico">⚡</span>JARVIS</button>
+  <p>Browsers require <b>one tap</b> before a page may use the <b>microphone</b> and <b>speak aloud</b>.<br>
+     After this tap I shall <b>listen continuously</b> — just begin any sentence with
+     <b>“JARVIS …”</b> and I shall act. Everything else you say is politely ignored.</p>
 </div>
 
 <div class="wrap">
@@ -132,15 +159,14 @@
     👉 <a id="fulltab" href="#" target="_blank" rel="noopener">OPEN JARVIS IN A NEW TAB</a> for full voice powers.
   </div>
   <div class="notice" id="micNotice">
-    🚫 <b>Microphone access was blocked.</b> Click the 🔒 lock icon in your browser's address bar →
-    allow <b>Microphone</b> → reload. (Or <a id="fulltab2" href="#" target="_blank" rel="noopener">open the full tab link</a>.)
+    🚫 <b>Microphone access was blocked.</b> Click the 🔒 icon in your address bar → allow <b>Microphone</b> → reload.
   </div>
 
   <div class="reactor-zone" id="rz">
     <div class="ring r3"></div><div class="ring r2"></div><div class="ring r1"></div>
-    <button id="core" title="Click to talk"><span class="icon">🎙️</span></button>
+    <button id="core" title="Power / stop speaking"><span class="icon">🎙️</span></button>
   </div>
-  <div id="status">STANDBY <span class="loop-badge" id="loopbadge">· 🔁 LOOP</span></div>
+  <div id="status">STANDBY <span class="loop-badge" id="loopbadge">· 🔁 ALWAYS-ON</span></div>
   <div id="interim"></div>
 
   <div id="chat"></div>
@@ -151,214 +177,234 @@
     <button class="qbtn">😄 Tell me a joke</button>
     <button class="qbtn">🕐 What time is it</button>
     <button class="qbtn">🎵 Play Believer</button>
-    <button class="qbtn">🔁 Loop mode on</button>
+    <button class="qbtn" id="voiceTest">🔊 Test voice</button>
     <button class="qbtn">⚡ Help</button>
   </div>
 
   <div class="bar">
-    <input id="txt" placeholder="Type or talk… e.g. «remind me to drink water in 10 minutes»" autocomplete="off">
-    <button class="cbtn" id="loopbtn" title="Loop mode: continuous conversation">🔁</button>
-    <button class="cbtn" id="micbtn" title="Voice input">🎤</button>
+    <input id="txt" placeholder="Type or say «JARVIS, …» — e.g. “jarvis remind me to drink water in 10 minutes”" autocomplete="off">
+    <button class="cbtn" id="loopbtn" title="Always-on listening on/off">🔁</button>
+    <button class="cbtn" id="micbtn" title="Listen now">🎤</button>
     <button class="cbtn" id="sndbtn" title="Toggle voice replies">🔊</button>
     <button class="cbtn" id="send" title="Send">➤</button>
   </div>
-  <footer>ARC REACTOR CORE · STARK INDUSTRIES INTERFACE · v1.2</footer>
+  <footer>ARC REACTOR CORE · WAKE-WORD INTERFACE · v1.3</footer>
 </div>
 
 <script>
 const $ = s => document.querySelector(s);
 const chat = $('#chat'), rz = $('#rz'), statusEl = $('#status'), interimEl = $('#interim');
 let soundOn = true, speaking = false, listening = false, userGestureAt = 0;
-let loop = localStorage.getItem('jarvis_loop') === '1';
+let loop = localStorage.getItem('jarvis_loop') !== '0';          // always-on default
+let activated = false;                                            // gesture done THIS session
+const wasActivated = localStorage.getItem('jarvis_activated') === '1';
 let loopPaused = false, noSpeechStreak = 0, micBlocked = false, audioUnlocked = false;
+const WAKE_TEST = /\bjarvis\b/i;
+const WAKE_STRIP = /^(?:hey|ok|okay|yo|please|uh|um)[,.\s]+/i;
+const ACK = ["Yes, sir?","At your service, sir.","Listening, sir.","Go ahead, sir.","How may I assist?"];
 
-/* ───────────── full-tab link (voice needs it) ───────────── */
+/* ───────────── full-tab link ───────────── */
 const SELF_URL = location.href;
-for(const id of ['fulltab','fulltab2']){ const el = document.getElementById(id); if(el) el.href = SELF_URL; }
-if(window.self !== window.top){ $('#iframeNotice').classList.add('show'); }
+const ft = document.getElementById('fulltab'); if(ft) ft.href = SELF_URL;
+if(window.self !== window.top) $('#iframeNotice').classList.add('show');
 
-/* ───────────── starfield ───────────── */
+/* ───────────── starfield / clock / health ───────────── */
 const cv = $('#stars'), cx = cv.getContext('2d'); let stars = [];
 function starsInit(){ cv.width = innerWidth; cv.height = innerHeight;
-  stars = Array.from({length:70},()=>({x:Math.random()*cv.width,y:Math.random()*cv.height,r:Math.random()*1.4+.3,s:Math.random()*.25+.05}));
-}
+  stars = Array.from({length:70},()=>({x:Math.random()*cv.width,y:Math.random()*cv.height,r:Math.random()*1.4+.3,s:Math.random()*.25+.05})); }
 addEventListener('resize', starsInit); starsInit();
-(function loopFields(){ cx.clearRect(0,0,cv.width,cv.height);
+(function fields(){ cx.clearRect(0,0,cv.width,cv.height);
   for(const st of stars){ st.y+=st.s; if(st.y>cv.height){st.y=0;st.x=Math.random()*cv.width;}
     cx.beginPath(); cx.fillStyle='rgba(120,220,255,'+(st.r/2)+')'; cx.arc(st.x,st.y,st.r,0,7); cx.fill(); }
-  requestAnimationFrame(loopFields); })();
-
-/* ───────────── clock / health ───────────── */
+  requestAnimationFrame(fields); })();
 setInterval(()=>{ $('#clock').textContent = new Date().toLocaleTimeString('en-IN',{hour12:true}).toUpperCase(); },1000);
-async function health(){ try{ const r = await fetch('/api/health'); const d = await r.json();
-    $('#net').classList.toggle('down', false);
+
+async function api(path, opts){
+  try{ return await fetch(path, opts); }
+  catch(e){
+    statusEl.textContent = '⟳ RECONNECTING…';
+    await new Promise(r=>setTimeout(r, 1800));
+    try{ const r2 = await fetch(path, opts); statusEl.textContent=''; setStatus(); return r2; }
+    catch(e2){ throw e2; }
+  }
+}
+async function health(){ try{ const r = await api('/api/health'); const d = await r.json();
+    $('#net').classList.remove('down');
     $('#net').innerHTML='<span class="dot"></span>'+(d.ai==='offline'?'ONLINE · AI OFF':'ONLINE · '+String(d.ai).toUpperCase());
   }catch(e){ $('#net').classList.add('down'); $('#net').innerHTML='<span class="dot"></span>LINK DOWN'; } }
 health(); setInterval(health, 30000);
 
-/* ───────────── speech synthesis ───────────── */
+/* ───────────── audio unlock (Chrome policy: one gesture) ───────────── */
 let voice = null;
 function pickVoice(){ const vs = speechSynthesis.getVoices();
   const pref = ['Google UK English Male','Daniel','Microsoft Ryan','Microsoft David','Google UK English','Google US English'];
-  for(const p of pref){ const v = vs.find(v=>v.name.includes(p)); if(v) return v; }
+  for(const p of pref){ const v = vs.find(v=>v.name && v.name.includes(p)); if(v) return v; }
   return vs.find(v=>v.lang && v.lang.startsWith('en')) || null; }
 if('speechSynthesis' in window){ speechSynthesis.onvoiceschanged = ()=>{ voice = pickVoice(); }; voice = pickVoice(); }
-
-const speakQueue = [];
-/* Chrome refuses to speak before the first user gesture — queue everything
-   and unlock the audio pipeline on first tap/click anywhere. */
 function unlockAudio(){
   if(audioUnlocked) return; audioUnlocked = true;
   try{ const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); }catch(e){}
-  setTimeout(()=>{ if(!speaking) nextSpeak(); }, 60);
+  setTimeout(()=>{ if(!speaking) nextSpeak(); }, 80);
 }
-addEventListener('pointerdown', unlockAudio, {once:true});
-addEventListener('keydown', unlockAudio, {once:true});
 
-function speak(text){
-  if(!soundOn || !('speechSynthesis' in window)) return;
-  speakQueue.push(text);
-  if(audioUnlocked && !speaking) nextSpeak();
-}
+/* ───────────── speech out ───────────── */
+const speakQueue = [];
+function speak(text){ if(!soundOn || !('speechSynthesis' in window)) return;
+  speakQueue.push(text); if(audioUnlocked && !speaking) nextSpeak(); }
 function nextSpeak(){
   if(!audioUnlocked) return;
   const t = speakQueue.shift();
   if(t === undefined){ speaking=false; rz.classList.remove('speaking'); setStatus(); maybeRelisten(); return; }
   speaking = true; rz.classList.add('speaking'); setStatus();
-  const clean = t.replace(/[*_`#>~➤↗▶🔍⚡🎙️⏰🔁🌤📰😄🕐🎵😈🤖]/g,'').trim();
+  const clean = t.replace(/[*_`#>~➤↗▶🔍⚡🎙️⏰🔁🌤📰😄🕐🎵🔊]/g,'').trim();
   if(!clean){ nextSpeak(); return; }
   const u = new SpeechSynthesisUtterance(clean);
   if(voice) u.voice = voice; u.rate = 1; u.pitch = .9; u.volume = 1;
   u.onend = ()=> setTimeout(nextSpeak, 120);
-  u.onerror = (e)=>{ if(e && e.error && e.error !== 'canceled' && e.error !== 'interrupted'){
-      statusEl.innerHTML = '🔇 VOICE OUTPUT ERROR — try clicking anywhere once';
-    } setTimeout(nextSpeak, 120); };
+  u.onerror = (e)=>{ if(e && e.error && !['canceled','interrupted'].includes(e.error))
+      statusEl.textContent = '🔇 VOICE OUTPUT ERROR — tap anywhere once'; setTimeout(nextSpeak, 120); };
   try{ speechSynthesis.speak(u); }catch(e){ nextSpeak(); }
 }
+let beepCtx = null;
+function beep(){ try{ beepCtx = beepCtx || new (window.AudioContext||window.webkitAudioContext)();
+  const o=beepCtx.createOscillator(), g=beepCtx.createGain();
+  o.frequency.value=880; g.gain.value=.05; o.connect(g); g.connect(beepCtx.destination);
+  o.start(); o.stop(beepCtx.currentTime+.09);}catch(e){} }
 
-/* ───────────── speech recognition ───────────── */
+/* ───────────── speech recognition (always-on + wake word) ───────────── */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
 if(SR){
-  rec = new SR(); rec.lang = 'en-IN';
-  rec.interimResults = true; rec.maxAlternatives = 1; rec.continuous = false;
+  rec = new SR(); rec.lang='en-IN'; rec.interimResults=true; rec.maxAlternatives=1; rec.continuous=false;
   rec.onresult = e => {
-    let finalTxt = '', interim = '';
-    for(let i = e.resultIndex; i < e.results.length; i++){
-      const res = e.results[i];
-      if(res.isFinal) finalTxt += res[0].transcript; else interim += res[0].transcript;
+    let finalTxt='', interim='';
+    for(let i=e.resultIndex; i<e.results.length; i++){
+      const res=e.results[i];
+      if(res.isFinal) finalTxt+=res[0].transcript; else interim+=res[0].transcript;
     }
-    interimEl.textContent = interim ? '“'+interim+'”' : interimEl.textContent;
-    if(finalTxt){ interimEl.textContent=''; noSpeechStreak = 0; stopListen(); doSend(finalTxt.trim()); }
+    if(interim){ interimEl.style.opacity=.85; interimEl.textContent='“'+interim+'”'; }
+    if(finalTxt){ interimEl.textContent=''; processVoice(finalTxt.trim()); }
   };
-  rec.onend = ()=>{ listening=false; rz.classList.remove('listening'); interimEl.textContent=''; setStatus(); maybeRelisten(); };
+  rec.onend = ()=>{ listening=false; rz.classList.remove('listening'); if(interimEl.style.opacity!=='0.45') interimEl.textContent=''; setStatus(); maybeRelisten(); };
   rec.onerror = e =>{
     listening=false; rz.classList.remove('listening'); setStatus();
     const err = e && e.error;
-    if(err === 'no-speech'){ noSpeechStreak++;
-      if(loop && noSpeechStreak >= 5 && !loopPaused){ loopPaused = true;
-        addMsg('jarvis','Loop mode paused — I could not hear anything for a while, sir. Click the reactor to resume.'); }
-    }
-    else if(err === 'not-allowed' || err === 'service-not-allowed'){ micBlocked = true;
+    if(err==='no-speech'){ noSpeechStreak++;
+      if(loop && noSpeechStreak>=8 && !loopPaused){ loopPaused=true;
+        addMsg('jarvis','Audio went quiet for a while, sir — listening paused. Tap ⚡ above or the reactor to resume.'); $('#rebar').classList.add('show'); } }
+    else if(err==='not-allowed'||err==='service-not-allowed'){ micBlocked=true;
       $('#micNotice').classList.add('show');
-      addMsg('jarvis','Microphone access is blocked, sir. Please allow it in the address bar (🔒 icon) and reload — or open me in a full tab using the link above.');
-    }
-    else if(err === 'audio-capture'){ addMsg('jarvis','No microphone detected on this device, sir. Typing works perfectly though.'); }
-    else if(err === 'network'){ addMsg('jarvis','The speech service is unreachable — voice input needs an internet connection.'); }
+      addMsg('jarvis','Microphone access is blocked, sir. Allow it via the 🔒 icon in your address bar, then reload.'); }
+    else if(err==='audio-capture'){ addMsg('jarvis','No microphone detected on this device, sir. Typing works perfectly though.'); }
+    else if(err==='network'){ interimEl.textContent='(speech service hiccup — retrying…)'; }
   };
-} else {
-  $('#micbtn').style.display='none';
+} else { $('#micbtn').style.display='none'; }
+
+/* ——— wake-word gate: ONLY "jarvis …" commands are executed ——— */
+function processVoice(t){
+  if(!WAKE_TEST.test(t)){ ignored(t); return; }        // <- everything else ignored
+  noSpeechStreak = 0; beep();
+  let cmd = t.replace(WAKE_STRIP,'').replace(/\bjarvis\b/i,'')
+             .replace(/^[\s,.\-…]+|[\s,.\-…]+$/g,'');
+  if(!cmd){
+    if(speaking){ speechSynthesis.cancel(); speakQueue.length=0; speaking=false; rz.classList.remove('speaking'); }
+    const ack = ACK[Math.floor(Math.random()*ACK.length)];
+    addMsg('jarvis', ack); speak(ack); setStatus(); return;
+  }
+  doSend(cmd);
+}
+function ignored(t){
+  interimEl.style.opacity='.45'; interimEl.textContent='…ignored: “'+t+'”';
+  clearTimeout(ignored._t); ignored._t=setTimeout(()=>{ interimEl.textContent=''; interimEl.style.opacity='.85'; }, 2800);
 }
 
 function startListen(){
-  if(!rec){ addMsg('jarvis','Voice input needs Chrome or Edge, sir. Typing always works.'); return; }
-  if(micBlocked || listening || speaking) return;
-  try{ rec.start(); listening = true; loopPaused = false; rz.classList.add('listening'); setStatus(); }catch(e){}
+  if(!rec || micBlocked || listening || speaking || !activated) return;
+  try{ rec.start(); listening=true; loopPaused=false; rz.classList.add('listening'); setStatus(); }catch(e){}
 }
 function stopListen(){ if(rec){ try{rec.stop();}catch(e){} } listening=false; rz.classList.remove('listening'); setStatus(); }
-function maybeRelisten(){
-  if(loop && !loopPaused && !micBlocked && !speaking && !listening){ setTimeout(startListen, 420); }
-}
+function maybeRelisten(){ if(loop && activated && !loopPaused && !micBlocked && !speaking && !listening) setTimeout(startListen, 420); }
 
-/* ───────────── loop mode ───────────── */
+/* ───────────── loop (always-on mic) toggle ───────────── */
 function setLoop(on, announce){
-  loop = on; localStorage.setItem('jarvis_loop', on ? '1' : '0');
-  $('#loopbtn').classList.toggle('on', on);
+  loop = on; localStorage.setItem('jarvis_loop', on?'1':'0');
+  $('#loopbtn').classList.toggle('on', on && activated);
   document.getElementById('loopbadge').classList.toggle('on', on);
-  loopPaused = false; noSpeechStreak = 0;
+  loopPaused=false; noSpeechStreak=0;
   if(announce){ addMsg('jarvis', announce); speak(announce); }
-  if(on) startListen(); else stopListen();
+  if(on && activated) startListen(); else if(!on) stopListen();
   setStatus();
 }
 $('#loopbtn').onclick = ()=>{ userGestureAt=Date.now();
-  setLoop(!loop, !loop ? 'Conversation mode engaged, sir. Speak freely — say "stop" whenever you wish to end it.'
-                       : 'Conversation mode off. I shall await your command.'); };
+  setLoop(!loop, !loop ? 'Always-on listening engaged, sir. Address me as JARVIS whenever you need me.'
+                       : 'Microphone off, sir. Tap the loop button or the re-activate bar to wake me again.');
+  if(!loop) $('#rebar').classList.add('show'); };
 
-/* loop-control phrases handled locally, instantly */
-function handleLoopPhrases(text){
+/* instant local voice phrases */
+function handleLocalPhrases(text){
   const lt = text.toLowerCase().trim();
-  if(/^(loop mode on|loop on|conversation mode|continuous mode|stay in loop)\b/.test(lt) && !loop){
-    setLoop(true,'Conversation mode engaged, sir. Speak freely.'); return true; }
-  if(/^((stop|shut up|quiet)( listening)?|loop off|loop mode off|exit loop|end conversation)\b/.test(lt)){
-    if(speaking){ speechSynthesis.cancel(); speakQueue.length = 0; speaking = false; rz.classList.remove('speaking'); }
-    if(loop) setLoop(false,'Understood. Standing by.');
+  if(/^((stop|shut up|quiet)( speaking| talking)?|enough|silence)[!.]?$/.test(lt)){
+    if(speaking){ speechSynthesis.cancel(); speakQueue.length=0; speaking=false; rz.classList.remove('speaking'); }
     setStatus(); return true; }
-  if(lt === 'stop' && speaking){ speechSynthesis.cancel(); speakQueue.length=0; speaking=false; setStatus(); return true; }
+  if(/^(loop mode on|loop on|wake up|start listening)\b/.test(lt) && !loop){
+    setLoop(true,'Always-on listening engaged, sir.'); return true; }
+  if(/^(loop off|loop mode off|microphone off|go to sleep|standby)\b/.test(lt) && loop){
+    setLoop(false,'Going to standby, sir. Tap the ⚡ bar when you need me.'); $('#rebar').classList.add('show'); return true; }
+  if(/^test (your )?voice\b/.test(lt)){ speak('Voice systems are nominal, sir. Audio output confirmed.'); return true; }
   return false;
 }
 
 /* ───────────── ui helpers ───────────── */
 function setStatus(){
+  if(micBlocked){ statusEl.textContent='🚫 MIC BLOCKED — ALLOW IN ADDRESS BAR, THEN RELOAD'; return; }
   statusEl.innerHTML =
-    micBlocked ? '🚫 MIC BLOCKED — SEE NOTICE ABOVE'
-    : listening ? '◉ LISTENING — SPEAK NOW'
+    listening ? '◉ LISTENING — SAY “JARVIS …”'
     : speaking ? '▶ SPEAKING…'
-    : loop ? (loopPaused ? '🔁 LOOP PAUSED — CLICK REACTOR TO RESUME'
-                         : '🔁 LOOP MODE — I AM LISTENING CONTINUOUSLY (say “stop” to exit)')
-    : rec ? 'STANDBY — CLICK REACTOR TO TALK, OR TYPE' : 'STANDBY — TYPE A COMMAND';
+    : !activated ? 'STANDBY — TAP ⚡ TO ACTIVATE VOICE CONTROL'
+    : loop ? (loopPaused ? '🔁 PAUSED — TAP ⚡ BAR OR REACTOR TO RESUME'
+                         : '🔁 ALWAYS-ON — SAY “JARVIS …” + YOUR COMMAND')
+    : 'MIC OFF — TYPING MODE (🔁 to re-enable voice)';
 }
 function addMsg(who, text){
-  const div = document.createElement('div'); div.className = 'msg '+who;
+  const div = document.createElement('div'); div.className='msg '+who;
   if(who==='jarvis'){ const w=document.createElement('span'); w.className='who'; w.textContent='J.A.R.V.I.S.'; div.appendChild(w); }
   div.appendChild(document.createTextNode(text));
-  chat.appendChild(div); chat.scrollTop = chat.scrollHeight; return div;
+  chat.appendChild(div); chat.scrollTop=chat.scrollHeight; return div;
 }
 function addActions(div, actions){
   for(const a of (actions||[])){
     if(a.type==='open_url'){ const link=document.createElement('a'); link.className='chip';
       link.href=a.url; link.target='_blank'; link.rel='noopener'; link.textContent=a.label||a.url;
       div.appendChild(document.createElement('br')); div.appendChild(link);
-      if(Date.now()-userGestureAt < 2500){ try{ window.open(a.url,'_blank'); }catch(e){} }
-    }
-  }
+      if(Date.now()-userGestureAt<2500){ try{ window.open(a.url,'_blank'); }catch(e){} } } }
 }
 
-/* ───────────── core send ───────────── */
+/* ───────────── core send (typed always executes; wake word stripped too) ───────────── */
 async function doSend(text){
-  text = (text||'').trim(); if(!text) return;
-  if(handleLoopPhrases(text)) return;
+  text=(text||'').trim(); if(!text) return;
+  text = text.replace(WAKE_STRIP,'').replace(/\bjarvis[,.\s]*/i,'').trim() || text;   // typed wake word ok
+  if(handleLocalPhrases(text)) return;
   addMsg('user', text); $('#txt').value='';
   try{
-    const r = await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+    const r = await api('/api/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
     const d = await r.json();
     for(const rep of d.replies||[]){
       const div = addMsg('jarvis', rep); addActions(div, d.actions.filter(a=>d.replies.indexOf(rep)===d.replies.length-1));
       speak(rep);
     }
     if(!(d.replies||[]).length && d.actions && d.actions.length){ const div=addMsg('jarvis','Right away, sir.'); addActions(div,d.actions); }
-  }catch(e){ addMsg('jarvis','I seem to have lost my connection to the server, sir. Is the backend running?'); }
+  }catch(e){ addMsg('jarvis','Connection hiccup, sir — the server may be waking up. Please try that again in a moment.'); }
 }
 $('#send').onclick = ()=>{ userGestureAt=Date.now(); doSend($('#txt').value); };
 $('#txt').addEventListener('keydown', e=>{ if(e.key==='Enter'){ userGestureAt=Date.now(); doSend($('#txt').value); } });
 document.querySelectorAll('.qbtn').forEach(b=> b.onclick = ()=>{ userGestureAt=Date.now();
-  const t = b.textContent.replace(/^[^\w]+/,'').trim();
-  if(/^loop mode on$/i.test(t)){ setLoop(true,'Conversation mode engaged, sir. Speak freely.'); return; }
-  doSend(t); });
-$('#sndbtn').onclick = function(){ soundOn=!soundOn; this.textContent = soundOn?'🔊':'🔇'; this.classList.toggle('off',!soundOn);
+  if(b.id==='voiceTest'){ speak('Voice systems are nominal, sir. You can hear me loud and clear.'); return; }
+  doSend(b.textContent.replace(/^[^\w]+/,'').trim()); });
+$('#sndbtn').onclick = function(){ soundOn=!soundOn; this.textContent=soundOn?'🔊':'🔇'; this.classList.toggle('off',!soundOn);
   if(!soundOn){ speechSynthesis.cancel(); speakQueue.length=0; speaking=false; setStatus(); } };
 $('#core').onclick = ()=>{ userGestureAt=Date.now();
   if(speaking){ speechSynthesis.cancel(); speakQueue.length=0; speaking=false; rz.classList.remove('speaking'); setStatus(); return; }
-  if(loopPaused){ loopPaused = false; setStatus(); if(loop) startListen(); return; }
+  if(loopPaused){ loopPaused=false; $('#rebar').classList.remove('show'); setStatus(); if(loop) startListen(); return; }
   listening ? stopListen() : startListen(); };
 $('#micbtn').onclick = ()=> startListen();
 
@@ -366,21 +412,34 @@ $('#micbtn').onclick = ()=> startListen();
 setInterval(async ()=>{ try{ const r = await fetch('/api/events'); const d = await r.json();
   for(const ev of d.events||[]){ addMsg('jarvis', ev); speak(ev); } }catch(e){} }, 5000);
 
+/* ───────────── activation flow (the ONE tap browsers require) ───────────── */
+function activate(){
+  userGestureAt=Date.now(); unlockAudio(); activated=true;
+  localStorage.setItem('jarvis_activated','1');
+  $('#activate').classList.add('hide'); $('#rebar').classList.remove('show');
+  speechSynthesis.getVoices(); voice = pickVoice();
+  setLoop(true);
+  startListen();
+  const g = 'All systems online, sir. Audio channel confirmed. I am listening — address me as JARVIS, and consider it done.';
+  addMsg('jarvis', g); speak(g);
+}
+$('#actbtn').onclick = activate;
+$('#rebarBtn').onclick = activate;
+
 /* ───────────── boot sequence ───────────── */
 const lines = ['> initializing arc reactor core ............ OK','> calibrating neural interface ........... OK',
  '> loading memory banks ................... OK','> establishing secure uplink ............. OK','> all systems online.'];
 let bi=0; const blog=$('#bootlog');
-(function typeBoot(){ if(bi<lines.length){ blog.textContent += lines[bi++]+'\n'; setTimeout(typeBoot, 300); }
+(function typeBoot(){ if(bi<lines.length){ blog.textContent+=lines[bi++]+'\n'; setTimeout(typeBoot,300); }
   else setTimeout(()=>{ $('#boot').classList.add('hide');
-    const h=new Date().getHours(), tod= h<12?'Good morning': h<17?'Good afternoon':'Good evening';
-    let g = tod+', sir. I am JARVIS — online and at your command.';
-    if(!audioUnlocked) g += ' (Click anywhere once to enable my voice.';
-    g += rec ? ' Click the reactor to talk, or type below.' : ' Voice input needs Chrome or Edge — typing works great though.';
-    if(!audioUnlocked && rec) g = g.replace('. Click',' ) Click');
-    addMsg('jarvis', g); speak(g); setStatus();
-    if(loop){ addMsg('jarvis','Loop mode is ON from your last session. Say “stop” to end it.'); setTimeout(startListen, 600); }
+    const h=new Date().getHours(), tod=h<12?'Good morning':h<17?'Good afternoon':'Good evening';
+    addMsg('jarvis', tod+', sir. JARVIS at the ready.' + (rec ? ' Tap ⚡ ACTIVATE and I shall begin listening for “JARVIS …”.' : ' This browser lacks voice input — typing works perfectly.'));
+    if(rec){ $('#activate').classList.add('show'); }          /* one tap → always-on */
+    if(!loop){ $('#rebar').classList.add('show'); }
+    setStatus();
   }, 500); })();
-setLoop(loop);
+$('#loopbtn').classList.toggle('on', loop && activated);
+if(loop) document.getElementById('loopbadge').classList.add('on');
 setStatus();
 </script>
 </body>
