@@ -958,7 +958,7 @@ def _handle(text, session_id="default"):
         say(HELP_TEXT)
 
     # ---- time & date ----
-    elif re.fullmatch(r"(?:what(?:'s| is)(?: the)? time(?: is it)?|tell me (?:the )?time|current time|time)", t):
+    elif re.fullmatch(r"(?:what(?:'s| is)(?: the)? time(?: is it)?|what time is it|tell me (?:the )?time|current time|time)", t):
         say(f"It's {_now().strftime('%I:%M %p')}, {USER_NAME}.")
     elif re.fullmatch(r"(?:what(?:'s| is) (?:the |today.s )?date|today.s date|date|today)", t):
         say(f"Today is {_now().strftime('%A, %B %d, %Y')}.")
