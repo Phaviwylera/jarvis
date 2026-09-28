@@ -11,7 +11,7 @@ function element() {
     addEventListener(type, fn){this[type] = fn}, focus(){}};
 }
 const storage = new Map();
-let nextPrompt = null, reloads = 0;
+let nextPrompt = null, reloads = 0, lastFetch = null;
 const context = vm.createContext({
   console, URL, URLSearchParams, Date, Math, AbortController,
   crypto:{randomUUID:()=> 'test-session'},
@@ -21,7 +21,7 @@ const context = vm.createContext({
   document:{querySelector(s){if(!elements.has(s))elements.set(s,element());return elements.get(s)},
     querySelectorAll:()=>[], createElement:element, addEventListener(){}},
   setTimeout:()=>1, clearTimeout(){}, setInterval:()=>1,
-  fetch:async()=>({ok:true,json:async()=>({ai:'offline',user:'Tester'})})
+  fetch:async(url, options)=>{lastFetch = {url, options}; return {ok:true,json:async()=>({ai:'offline',user:'Tester'})}}
 });
 vm.runInContext(source,context);
 assert.equal(storage.get('jarvis_api'),undefined,'URL must not silently change the brain');
@@ -33,4 +33,9 @@ assert.equal(storage.get('jarvis_api'),'https://brain.example'); assert.equal(re
 vm.runInContext("addEntry('jarvis','Safe',{},[{type:'open_url',url:'javascript:alert(1)'}])",context);
 const article = elements.get('#feed').children.at(-1);
 assert.equal(article.children[1].children.at(-1).children.length,0,'Unsafe links filtered');
-console.log('Frontend controller checks passed');
+storage.set('jarvis_access','test-owner-code');
+vm.runInContext("api('/api/command',{method:'POST'})",context);
+setImmediate(() => {
+  assert.equal(lastFetch.options.headers['X-Jarvis-Token'],'test-owner-code');
+  console.log('Frontend controller checks passed');
+});

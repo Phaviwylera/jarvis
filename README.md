@@ -1,5 +1,9 @@
 # J.A.R.V.I.S. — Just A Rather Very Intelligent System 🎙️
 
+> **v2.2 Studio:** owner-protected web commands and tools, downloadable small web-app
+> projects, explicit email sending when configured, personal WhatsApp reply drafts,
+> and persistent in-tab reminders. See `RELEASE_2.2.md` for setup and limitations.
+
 > **v2.1.1 web reliability:** conversation-aware answer caching, complete replies,
 > stricter question routing, all-command conversation history, provider-key fixes,
 > validated API requests, and connection settings accessible from the top bar.
@@ -221,5 +225,4 @@ jarvis/
 - On Render, keys are environment variables visible only to you.
 
 *Now go say "hello" to your new assistant, sir.* 🫡
-
 
