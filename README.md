@@ -61,7 +61,7 @@ Your personal AI assistant — **two bodies, one brain**:
 
 ---
 
-## 🌐 WEB APP — deployment (both free, both auto-deploy on `git push`)
+## 🌐 WEB APP — deployment
 
 The web app has two halves: **FACE** 🎭 (static HUD in `web/static`) + **BRAIN** 🧠 (Python API in `web/`).
 ⚠️ **Netlify cannot run the Python brain** — it hosts static files only and CANNOT compile desktop libs
@@ -73,10 +73,11 @@ The web app has two halves: **FACE** 🎭 (static HUD in `web/static`) + **BRAIN
    dependency installation → build is seconds long and always green. ✅
 2. **Render** → deploy the brain as in *Option A* below → copy your brain URL
    `https://jarvis-xxxx.onrender.com`.
-3. **Link once** (saved forever in the browser): open your Netlify site → tap **⚙️** in the bottom bar →
-   paste the Render URL. (Or open the site once with `?api=https://jarvis-xxxx.onrender.com`.)
+3. **Link once** (saved in this browser): open your Netlify site → tap **⚙️** in the top bar →
+   paste the Render URL. URL query parameters do not change the saved connection.
    CORS is enabled on the brain, so the Netlify face can call it from anywhere. 🔓
-4. Push to GitHub → **face updates on Netlify + brain updates on Render**. Fully hands-free. ♻️
+4. Once both services are connected with automatic deploy enabled, pushes to GitHub can
+   update the Netlify face and Render brain. Check each service's deploy status. ♻️
 
 ### 🅰️ Option A — all-in-one on Render
 The same blueprint ALSO serves the HUD — one URL for face+brain, no linking step needed.
@@ -220,4 +221,5 @@ jarvis/
 - On Render, keys are environment variables visible only to you.
 
 *Now go say "hello" to your new assistant, sir.* 🫡
+
 
