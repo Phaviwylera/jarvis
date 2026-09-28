@@ -1,5 +1,7 @@
 # JARVIS v2.2 — Studio and connected actions
 
+v2.2.1 corrects a clock-intent routing bug found in the live smoke check: “what time is it” now uses the local clock instead of asking an AI provider.
+
 This release adds a protected owner mode to the web assistant. Set `JARVIS_ACCESS_TOKEN` on the Render service, then enter the same code through **Tools → Owner access** in your browser. Without a configured code, command and action APIs intentionally refuse requests. Do not put the code in GitHub or share it. The browser saves it locally; avoid shared devices.
 
 **App Studio** creates a small static HTML/CSS/JavaScript project from a written brief and downloads a ZIP for review. Generated code is never run by the JARVIS server. This is a bounded first step, not a promise to build every kind of application. Publishing a new GitHub repository or Render service is not yet built into JARVIS and needs separate, scoped credentials and a review step.

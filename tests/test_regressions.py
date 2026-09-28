@@ -101,7 +101,7 @@ class Regressions(unittest.TestCase):
             self.assertEqual(self.client.post('/api/command', json=payload).status_code, 422)
 
     def test_api_status_static_and_errors(self):
-        self.assertEqual(self.client.get('/api/health').json()['version'], '2.2.0')
+        self.assertEqual(self.client.get('/api/health').json()['version'], '2.2.1')
         self.assertEqual(self.client.get('/').status_code, 200)
         self.assertEqual(self.client.get('/api/missing').status_code, 404)
         with patch.object(brain, 'handle', side_effect=RuntimeError('private error')):
@@ -161,6 +161,12 @@ class Regressions(unittest.TestCase):
         self.assertIn('6.2137', brain.handle('convert 10 km to miles')['replies'][0])
         with patch.object(brain, 'translate_text', return_value='Bonjour'):
             self.assertIn('Bonjour', ' '.join(brain.handle('translate hello to french')['replies']))
+
+    def test_time_question_uses_clock_not_ai(self):
+        with patch.object(brain.AI, 'answer', side_effect=AssertionError('should not use AI')):
+            result = brain.handle('what time is it', 'time-session', timezone_offset=-330)
+        self.assertEqual(result['provider'], 'local')
+        self.assertIn("It's", result['replies'][0])
 
 
 if __name__ == '__main__':

@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field, field_validator
 import brain
 import studio
 
-app = FastAPI(title="J.A.R.V.I.S. Web", version="2.2.0")
+app = FastAPI(title="J.A.R.V.I.S. Web", version="2.2.1")
 
 # Allow the HUD hosted anywhere (Netlify, Render, cloudflared…) to call this brain.
 app.add_middleware(
