@@ -40,7 +40,17 @@ jobs:
           PY
 
       - name: Install web deps
-        run: pip install -r web/requirements.txt
+        run: pip install -r web/requirements.txt httpx
+
+      - name: Web regression tests
+        run: python -m unittest discover -s tests -v
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Frontend controller tests
+        run: node tests/frontend.cjs
 
       - name: Web app — boots and answers commands
         run: |
@@ -54,3 +64,4 @@ jobs:
           curl -sf -X POST http://127.0.0.1:8123/api/command \
                -H "Content-Type: application/json" -d '{"text":"open youtube"}' | grep -q youtube
           echo "✔ web smoke test passed"
+

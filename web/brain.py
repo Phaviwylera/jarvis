@@ -7,6 +7,7 @@ Pure standard library + the environment. Zero required pip packages.
 """
 
 import datetime
+from contextvars import ContextVar
 import json
 import math
 import os
@@ -21,7 +22,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-MEM = os.path.join(BASE, "memory")
+MEM = os.environ.get("JARVIS_MEMORY_DIR") or os.path.join(BASE, "memory")
 os.makedirs(MEM, exist_ok=True)
 NOTES_F = os.path.join(MEM, "notes.json")
 REMS_F = os.path.join(MEM, "reminders.json")
@@ -45,6 +46,13 @@ CITY = os.environ.get("CITY", "Chennai")
 
 _events = queue.Queue()          # due reminders waiting to be shown/spoken
 _lock = threading.Lock()
+_request = ContextVar("request_metadata", default=None)
+
+
+def _mark(provider, cache=False):
+    metadata = _request.get()
+    if metadata is not None:
+        metadata.update(provider=provider, cache=cache)
 
 # ============================================================================
 #  HTTP helpers
@@ -117,7 +125,7 @@ class AIBrain:
         self.cache_hits = 0
         self.last_cache_hit = False
         self.chain = []
-        self._add(self.primary, os.environ.get("JARVIS_API_KEY", ""))
+        self._add(self.primary, os.environ.get("JARVIS_API_KEY") or os.environ.get(ENV_KEY_NAMES.get(self.primary, ""), ""))
         for name in PROVIDER_ORDER:
             if name == self.primary:
                 continue
@@ -155,25 +163,27 @@ class AIBrain:
     def answer(self, question, session_id="default", augment="", cacheable=True):
         """Answer with: answer-cache → provider chain (with cooldowns) → None.
         augment: short RAG context injected ONLY into the outbound prompt (not history).
-        cacheable: safe to remember globally (skip for memory-augmented personal asks)."""
+        cacheable: allow exact-context reuse (skip memory-augmented personal asks)."""
         self.last_cache_hit = False
+        session_id = (session_id or "default")[:100]
+        with self.history_lock:
+            history = list(self.histories.get(session_id, []))
+        # Exact context prevents cross-user and stale follow-up cache hits.
+        cache_key = json.dumps([session_id, USER_NAME,
+                               [(e["name"], e["model"], e["base_url"]) for e in self.chain],
+                               history, question], sort_keys=True, ensure_ascii=False)
         if cacheable:
-            hit = _answer_cache_get(question)
+            hit = _answer_cache_get(cache_key)
             if hit is not None:
                 self.last_cache_hit = True
                 self.cache_hits += 1
-                # tokens we just avoided spending: question + reply + persona overhead
                 self.tokens_saved += (len(question) + len(hit) + 400) // 4
+                _mark("cache", True)
                 return hit
         if not self.available:
             return None
-        session_id = (session_id or "default")[:100]
-        with self.history_lock:
-            if session_id not in self.histories and len(self.histories) >= 100:
-                self.histories.pop(next(iter(self.histories)))
-            history = list(self.histories.get(session_id, []))
-            history.append({"role": "user", "content": question})
-            history = history[-20:]
+        history.append({"role": "user", "content": question})
+        history = history[-20:]
         # outbound payload: RAG augment rides on the last user message; older turns
         # are compacted to 200 chars/token efficiency without losing their gist.
         out = [dict(m) for m in history]
@@ -192,16 +202,14 @@ class AIBrain:
                     if reply:
                         if e["name"] != self.primary:
                             print(f"[ai] FAILOVER -> answered by {e['name']}")
+                        _mark(e["name"])
                         self.last_used = e["name"]
                         self.last_error = None
                         e["fails"] = 0
                         e["dead_until"] = 0.0
                         self.tokens_est += (sum(len(m["content"]) for m in out) + len(reply)) // 4
-                        history.append({"role": "assistant", "content": reply})
-                        with self.history_lock:
-                            self.histories[session_id] = history[-20:]
                         if cacheable:
-                            _answer_cache_put(question, reply)
+                            _answer_cache_put(cache_key, reply)
                         return reply
                 except urllib.error.HTTPError as err:
                     print(f"[ai] {e['name']}: HTTP {err.code} (attempt {attempt})")
@@ -246,9 +254,9 @@ AI = AIBrain()
 #  Info services (free, no key)
 # ============================================================================
 
-def wikipedia_summary(topic):
+def wikipedia_summary(topic, depth=0):
     topic = topic.strip()
-    if not topic:
+    if not topic or depth >= 2:
         return None
     title = urllib.parse.quote(topic.replace(" ", "_"))
     try:
@@ -262,7 +270,7 @@ def wikipedia_summary(topic):
                                     "limit": 1, "namespace": 0, "format": "json"})
         res = http_get_json(f"https://en.wikipedia.org/w/api.php?{q}")
         if len(res) > 1 and res[1]:
-            return wikipedia_summary(res[1][0])
+            return wikipedia_summary(res[1][0], depth + 1)
     except Exception:
         pass
     return None
@@ -661,6 +669,7 @@ def _save(path, data):
             os.replace(tmp, path)             # atomic: a kill mid-write can't corrupt memory
         except Exception as e:
             print(f"[mem] {e}")
+            raise
 
 
 def _yahoo_quote(symbol):
@@ -690,7 +699,7 @@ def market_snapshot():
 #  SENTINEL: answer cache + RAG memory retrieval (zero-cost, stdlib-only)
 # ============================================================================
 
-_CACHE = {}                        # normalized question → (timestamp, reply)
+_CACHE = {}                        # session + exact context → (timestamp, reply)
 _CACHE_TTL = 25 * 60               # spend once, reuse for 25 minutes
 _CACHE_MAX = 200
 
@@ -700,12 +709,12 @@ def _norm_q(text):
 
 
 def _answer_cache_get(question):
-    item = _CACHE.get(_norm_q(question))
+    item = _CACHE.get(question)
     if not item:
         return None
     ts, reply = item
     if time.time() - ts > _CACHE_TTL:
-        _CACHE.pop(_norm_q(question), None)
+        _CACHE.pop(question, None)
         return None
     return reply
 
@@ -713,7 +722,7 @@ def _answer_cache_get(question):
 def _answer_cache_put(question, reply):
     if len(_CACHE) >= _CACHE_MAX:
         _CACHE.pop(next(iter(_CACHE)))          # evict oldest entries first
-    _CACHE[_norm_q(question)] = (time.time(), reply)
+    _CACHE[question] = (time.time(), reply)
 
 
 _STOP = set("""a an the is are was were am be been being i me my we our you your he she it his her its
@@ -873,6 +882,26 @@ def _schedule(task, when_epoch):
 # ============================================================================
 
 def handle(text, session_id="default"):
+    """Record all command turns and keep telemetry local to this request."""
+    token = _request.set({"provider": "local", "cache": False})
+    try:
+        result = _handle(text, session_id)
+        metadata = _request.get()
+        result["provider"] = metadata["provider"]
+        result.setdefault("stats", {})["cache"] = metadata["cache"]
+        with AI.history_lock:
+            history = AI.histories.setdefault(session_id, [])
+            history.extend([{"role": "user", "content": text},
+                            {"role": "assistant", "content": "\n".join(result["replies"])}])
+            AI.histories[session_id] = history[-20:]
+            while len(AI.histories) > 100:
+                AI.histories.pop(next(iter(AI.histories)))
+        return result
+    finally:
+        _request.reset(token)
+
+
+def _handle(text, session_id="default"):
     """Process one user command → {'replies': [...], 'actions': [...]}"""
     global USER_NAME
     replies, actions = [], []
@@ -884,9 +913,9 @@ def handle(text, session_id="default"):
     def open_url(url, label):
         actions.append({"type": "open_url", "url": url, "label": label})
 
-    t = (text or "").lower().strip()
-    t = re.sub(r"\s+", " ", t)
-    t = re.sub(r"^(please|hey|ok|okay| jarvis,?)\s+", "", t)
+    text = re.sub(r"^(?:(?:please|hey|ok|okay|jarvis)[,\s]+)+", "", (text or "").strip(), flags=re.I)
+    text = re.sub(r"^(?:can|could|would) you (?:please )?(?=(?:open|play|search|remind|calculate|show|read|check)\b)", "", text, flags=re.I)
+    t = re.sub(r"\s+", " ", text.lower())
     t = t.rstrip("?!")
     if not t:
         return {"replies": ["Yes? I'm listening."], "actions": []}
@@ -900,11 +929,11 @@ def handle(text, session_id="default"):
         say(f"“{out}”" if out else "The translation line is unreachable right now, sir.")
 
     # ---- identity / small talk ----
-    elif re.search(r"\b(who are you|your name|about yourself)\b", t):
+    elif re.fullmatch(r"(who are you|what is your name|your name|tell me about yourself)", t):
         say(f"I am JARVIS — Just A Rather Very Intelligent System, at your service, {USER_NAME}.")
     elif re.search(r"\bhow are you\b", t):
         say(f"All systems running at optimal capacity, {USER_NAME}. How can I help?")
-    elif re.search(r"\bthank", t):
+    elif re.fullmatch(r"(thanks|thank you)(?: jarvis)?", t):
         say(f"Always at your service, {USER_NAME}.")
     elif t in ("hello", "hi", "hey", "hello jarvis", "hi jarvis", "greetings", "start"):
         h = datetime.datetime.now().hour
@@ -933,11 +962,11 @@ def handle(text, session_id="default"):
         say(HELP_TEXT)
 
     # ---- time & date ----
-    elif re.search(r"\b(what('s| is)?|tell me|current)\b.*\btime\b", t) or t == "time":
+    elif re.fullmatch(r"(?:what(?:'s| is)(?: the)? time(?: is it)?|tell me (?:the )?time|current time|time)", t):
         say(f"It's {datetime.datetime.now().strftime('%I:%M %p')}, {USER_NAME}.")
-    elif re.search(r"\b(what('s| is)?|today('s| is)?)\b.*\bdate\b", t) or t in ("date", "today"):
+    elif re.fullmatch(r"(?:what(?:'s| is) (?:the |today.s )?date|today.s date|date|today)", t):
         say(f"Today is {datetime.datetime.now().strftime('%A, %B %d, %Y')}.")
-    elif re.search(r"\bwhat day\b", t):
+    elif re.fullmatch(r"what day(?: is it| is today)?", t):
         say(f"It's {datetime.datetime.now().strftime('%A')}.")
 
     # ---- calculations ----
@@ -968,14 +997,14 @@ def handle(text, session_id="default"):
         say(get_forecast(city) or f"Forecast unavailable for {city} right now, sir.")
 
     # ---- weather ----
-    elif re.search(r"\bweather\b", t):
+    elif re.fullmatch(r"(?:(?:what(?:'s| is)|tell me|check) (?:the )?)?weather(?: (?:today|now|in .+|at .+|for .+))?", t):
         m = re.search(r"weather\s+(?:in|at|for)\s+(.+)", t)
         city = (m.group(1) if m else CITY).strip()
         say(f"Checking the skies over {city}...")
         say(get_weather(city))
 
     # ---- news ----
-    elif re.search(r"\b(news|headlines|top stories|what's happening)\b", t):
+    elif re.fullmatch(r"(?:(?:give me|show me|read|tell me) (?:the )?)?(?:latest )?(?:news|headlines|top stories|what's happening|daily briefing|give me a concise briefing for today)", t):
         headlines = get_top_news()
         if headlines:
             say("Here are today's top stories:")
@@ -996,6 +1025,8 @@ def handle(text, session_id="default"):
             say(f"Reminder set: {task} — in {n} {unit}. (Keep this tab open and I'll alert you.)")
         elif m2:
             task, hh, mm, ap = m2.group(1), int(m2.group(2)), int(m2.group(3) or 0), m2.group(4)
+            if mm > 59 or hh > 23 or (ap and not 1 <= hh <= 12):
+                return {"replies": ["Please use a valid time, such as 6:30 pm or 18:30."], "actions": []}
             if ap and ap.startswith("p") and hh < 12:
                 hh += 12
             if ap and ap.startswith("a") and hh == 12:
@@ -1273,19 +1304,6 @@ def handle(text, session_id="default"):
     elif re.match(r"(?:wikipedia|wiki)\s+(.+)", t):
         topic = re.match(r"(?:wikipedia|wiki)\s+(.+)", t).group(1)
         say(_knowledge(topic, session_id))
-    elif re.match(r"(?:tell me (?:something )?about|know about|information (?:about|on)|explain)\s+(.+?)\??$", t):
-        topic = re.match(r"(?:tell me (?:something )?about|know about|information (?:about|on)|explain)\s+(.+?)\??$", t).group(1)
-        if len(topic.split()) <= 8:
-            say(_knowledge(topic, session_id))
-        else:
-            say(_fallback(text, session_id))
-    elif re.match(r"(?:who is|who's|who was|what is|what's a|whats a|who are)\s+(.+?)\??$", t):
-        topic = re.match(r"(?:who is|who's|who was|what is|what's a|whats a|who are)\s+(.+?)\??$", t).group(1)
-        if len(topic.split()) <= 8:
-            say(_knowledge(re.sub(r"\?$", "", topic), session_id))
-        else:
-            say(_fallback(text, session_id))
-
     # ---- AI / offline fallback ----
     else:
         say(_fallback(text, session_id))
@@ -1326,9 +1344,8 @@ def _fallback(text, session_id="default"):
     reply = AI.answer(text, session_id=session_id, augment=augment,
                       cacheable=not bool(augment))    # memory-augmented answers stay uncached
     if reply:
-        return _clip(re.sub(r"[*_`#>~]", "", reply).strip(), 400)
-    ans = wikipedia_summary(text) or duckduckgo_answer(text)
-    if ans:
-        return _clip(ans)
-    return (f"I'm not sure about that yet, {USER_NAME}. Try 'help' to see my commands — "
-            "or set a JARVIS_API_KEY and I'll answer absolutely anything.")
+        return reply.strip()
+    _mark("unavailable")
+    return ("I could not get an AI answer right now. Basic commands still work. "
+            "Check the server AI configuration or try again shortly.")
+

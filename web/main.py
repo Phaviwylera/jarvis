@@ -9,15 +9,15 @@ import os
 import time
 import uuid
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 import brain
 
-app = FastAPI(title="J.A.R.V.I.S. Web", version="2.1")
+app = FastAPI(title="J.A.R.V.I.S. Web", version="2.1.1")
 
 # Allow the HUD hosted anywhere (Netlify, Render, cloudflared…) to call this brain.
 app.add_middleware(
@@ -31,8 +31,15 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 
 
 class Command(BaseModel):
-    text: str
-    session_id: str | None = None
+    text: str = Field(min_length=1, max_length=4000)
+    session_id: str | None = Field(default=None, min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
+
+    @field_validator("text")
+    @classmethod
+    def nonempty(cls, value):
+        if not value.strip():
+            raise ValueError("Enter a command")
+        return value.strip()
 
 
 @app.post("/api/command")
@@ -43,13 +50,12 @@ def command(cmd: Command):
         result = brain.handle(cmd.text, session_id=session_id)
     except Exception as e:                       # never let a fault become a 500
         print(f"[command] {e}")
-        result = {"replies": ["I hit a snag processing that, sir — please try once more."],
-                  "actions": [], "stats": {}}
+        raise HTTPException(status_code=503, detail="The command could not be completed. Please try again.") from e
     stats = result.pop("stats", {}) or {}
     result["meta"] = {
         "session_id": session_id,
         "latency_ms": round((time.perf_counter() - started) * 1000),
-        "provider": brain.AI.last_used or "local",
+        "provider": result.pop("provider", "local"),
         "ai_status": brain.AI.status(),
         "tokens_est": brain.AI.tokens_est,
         "tokens_saved": brain.AI.tokens_saved,
@@ -67,7 +73,7 @@ def events():
 
 @app.get("/api/health")
 def health():
-    return {"status": "online",
+    return {"status": "online", "version": app.version,
             "ai": brain.AI.status(),
             "last_used": brain.AI.last_used,
             "last_error": brain.AI.last_error,
@@ -91,4 +97,5 @@ app.mount("/", StaticFiles(directory=os.path.join(BASE, "static"), html=True),
 
 @app.exception_handler(404)
 async def not_found(request, exc):
-    return FileResponse(os.path.join(BASE, "static", "index.html"))
+    return JSONResponse({"detail": "Not found"}, status_code=404)
+

@@ -1,5 +1,10 @@
 # J.A.R.V.I.S. — Just A Rather Very Intelligent System 🎙️
 
+> **v2.1.1 web reliability:** conversation-aware answer caching, complete replies,
+> stricter question routing, all-command conversation history, provider-key fixes,
+> validated API requests, and connection settings accessible from the top bar.
+> SENTINEL commands, memory and telemetry are preserved. See `RELEASE_2.1.1.md`.
+
 > **v2.1 SENTINEL:** long-term memory with RAG (say *"remember that …"* and future
 > AI answers use it), a token-efficiency engine (answer cache, compacted history —
 > watch the `≈tok` / `saved` chips), reliability hardening (provider circuit breaker
@@ -215,3 +220,4 @@ jarvis/
 - On Render, keys are environment variables visible only to you.
 
 *Now go say "hello" to your new assistant, sir.* 🫡
+
