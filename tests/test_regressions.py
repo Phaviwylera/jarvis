@@ -4,6 +4,9 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import io
+import json
+import zipfile
 from unittest.mock import patch
 
 MEMORY = tempfile.TemporaryDirectory()
@@ -12,17 +15,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'web'))
 with patch('threading.Thread.start'):
     import brain
 import main
+import studio
 from fastapi.testclient import TestClient
 
 
 class Regressions(unittest.TestCase):
     def setUp(self):
-        self.env = patch.dict(os.environ, {'GEMINI_API_KEY': 'test-only'}, clear=True)
+        self.env = patch.dict(os.environ, {'GEMINI_API_KEY': 'test-only',
+                                        'JARVIS_ACCESS_TOKEN': 'test-owner-code'}, clear=True)
         self.env.start()
         self.addCleanup(self.env.stop)
         brain.AI = brain.AIBrain()
         brain._CACHE.clear()
-        self.client = TestClient(main.app)
+        self.client = TestClient(main.app, headers={'X-Jarvis-Token': 'test-owner-code'})
 
     def test_named_primary_key(self):
         self.assertTrue(brain.AI.available)
@@ -96,13 +101,61 @@ class Regressions(unittest.TestCase):
             self.assertEqual(self.client.post('/api/command', json=payload).status_code, 422)
 
     def test_api_status_static_and_errors(self):
-        self.assertEqual(self.client.get('/api/health').json()['version'], '2.1.1')
+        self.assertEqual(self.client.get('/api/health').json()['version'], '2.2.0')
         self.assertEqual(self.client.get('/').status_code, 200)
         self.assertEqual(self.client.get('/api/missing').status_code, 404)
         with patch.object(brain, 'handle', side_effect=RuntimeError('private error')):
             response = self.client.post('/api/command', json={'text': 'hello'})
         self.assertEqual(response.status_code, 503)
         self.assertNotIn('private error', response.text)
+
+    def test_owner_gate(self):
+        self.assertEqual(TestClient(main.app).post('/api/command', json={'text': 'hello'}).status_code, 401)
+        self.assertEqual(TestClient(main.app).post('/api/email/send', json={}).status_code, 401)
+        self.assertEqual(TestClient(main.app).post('/api/studio/build', json={}).status_code, 401)
+        with patch.dict(os.environ, {'JARVIS_ACCESS_TOKEN': ''}):
+            self.assertEqual(self.client.post('/api/command', json={'text': 'hello'}).status_code, 503)
+
+    def test_studio_archive_and_path_validation(self):
+        valid = {'name': 'todo-app', 'summary': 'A todo list', 'files': [
+            {'path': 'index.html', 'content': '<h1>Todo</h1>'},
+            {'path': 'app.js', 'content': 'console.log(1)'}]}
+        with patch.object(studio, '_model_reply', return_value=json.dumps(valid)):
+            response = self.client.post('/api/studio/build', json={'prompt': 'Build a tiny todo app'})
+        self.assertEqual(response.status_code, 200)
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            self.assertIn('index.html', archive.namelist())
+            self.assertIn('README.md', archive.namelist())
+        valid['files'][0]['path'] = '../escape.html'
+        with patch.object(studio, '_model_reply', return_value=json.dumps(valid)):
+            self.assertEqual(self.client.post('/api/studio/build', json={'prompt': 'Build a tiny todo app'}).status_code, 422)
+
+    def test_email_requires_configuration(self):
+        response = self.client.post('/api/email/send', json={
+            'to': 'friend@example.com', 'subject': 'Hi', 'body': 'Hello'})
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(self.client.post('/api/email/send', json={
+            'to': 'friend@example.com', 'subject': 'Hi\nBcc: x@example.com', 'body': 'Hello'}).status_code, 422)
+
+    def test_reminders_delivered_once_per_session(self):
+        with patch.object(brain.time, 'time', return_value=1000):
+            brain.handle('remind me to drink water in 1 seconds', 'reminder-a')
+            self.assertEqual(self.client.get('/api/events', params={'session_id': 'reminder-a'}).json()['events'], [])
+        with patch.object(brain.time, 'time', return_value=1002):
+            self.assertEqual(self.client.get('/api/events', params={'session_id': 'reminder-b'}).json()['events'], [])
+            due = self.client.get('/api/events', params={'session_id': 'reminder-a'}).json()['events']
+            self.assertEqual(len(due), 1)
+            self.assertIn('drink water', due[0]['text'])
+            self.client.post('/api/events/ack', json={'session_id': 'reminder-a', 'event_ids': [due[0]['id']]})
+            self.assertEqual(self.client.get('/api/events', params={'session_id': 'reminder-a'}).json()['events'], [])
+
+    def test_personal_whatsapp_is_draft_only(self):
+        with patch.object(brain.AI, 'answer', return_value='Sounds good!'):
+            response = self.client.post('/api/whatsapp/draft', json={
+                'number': '919876543210', 'received': 'See you tomorrow?', 'style': 'friendly'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['draft'], 'Sounds good!')
+        self.assertTrue(response.json()['url'].startswith('https://wa.me/919876543210?text='))
 
     def test_existing_sentinel_commands_preserved(self):
         self.assertIn('6.2137', brain.handle('convert 10 km to miles')['replies'][0])

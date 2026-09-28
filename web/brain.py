@@ -11,11 +11,11 @@ from contextvars import ContextVar
 import json
 import math
 import os
-import queue
 import random
 import re
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -44,9 +44,17 @@ _prefs = _read_prefs()
 USER_NAME = _prefs.get("name") or os.environ.get("USER_NAME") or "Phavi"
 CITY = os.environ.get("CITY", "Chennai")
 
-_events = queue.Queue()          # due reminders waiting to be shown/spoken
-_lock = threading.Lock()
+_lock = threading.RLock()
 _request = ContextVar("request_metadata", default=None)
+
+
+def _session():
+    return (_request.get() or {}).get("session_id", "default")
+
+
+def _now():
+    offset = (_request.get() or {}).get("timezone_offset", 0)
+    return datetime.datetime.now(datetime.timezone(datetime.timedelta(minutes=-offset)))
 
 
 def _mark(provider, cache=False):
@@ -774,7 +782,9 @@ def _tfidf_search(query, docs, k=3, min_score=0.10):
 # ---- long-term memory (the RAG store) ----
 
 def memory_all():
-    return _load(LT_F, [])
+    # Pre-2.2 records had no session marker. The owner still needs those facts.
+    return [m for m in _load(LT_F, [])
+            if m.get("session_id") in (None, _session())]
 
 
 def memory_add(fact):
@@ -782,33 +792,35 @@ def memory_add(fact):
     if len(fact) < 3:
         return False
     low = fact.lower()
-    mems = memory_all()
-    for m in mems:
-        if low == m["text"].lower():
-            return None                     # already known — no duplicates
-    mems.append({"text": fact, "time": datetime.datetime.now().isoformat(timespec="seconds")})
-    if len(mems) > 500:
-        mems = mems[-500:]
-    _save(LT_F, mems)
+    with _lock:
+        mems = _load(LT_F, [])
+        for m in memory_all():
+            if low == m["text"].lower():
+                return None
+        mems.append({"text": fact, "session_id": _session(),
+                     "time": _now().isoformat(timespec="seconds")})
+        _save(LT_F, mems[-500:])
     return True
 
 
 def memory_forget(query):
-    mems = memory_all()
-    if not mems:
-        return None
-    hits = _tfidf_search(query.strip(), [m["text"] for m in mems], k=1, min_score=0.15)
-    if not hits:
-        return None
-    gone = mems.pop(hits[0][1])
-    _save(LT_F, mems)
-    return gone["text"]
+    with _lock:
+        owned = memory_all()
+        hits = _tfidf_search(query.strip(), [m["text"] for m in owned], k=1, min_score=0.15)
+        if not hits:
+            return None
+        gone = owned[hits[0][1]]
+        mems = _load(LT_F, [])
+        mems.remove(gone)
+        _save(LT_F, mems)
+        return gone["text"]
 
 
 def memory_search(query, k=3):
     """Relevant memories + recent notes, best first: [(score, text)]."""
     docs = [m["text"] for m in memory_all()]
-    docs += [nt["text"] for nt in _load(NOTES_F, [])[-30:]]
+    docs += [nt["text"] for nt in _load(NOTES_F, [])
+             if nt.get("session_id") in (None, _session())][-30:]
     return [(score, docs[i]) for score, i in _tfidf_search(query, docs, k=k)]
 
 
@@ -835,55 +847,39 @@ def _rag_augment(question, budget=380):
             + " | ".join(facts)) if facts else ""
 
 
-def drain_events():
-    out = []
-    while not _events.empty():
-        try:
-            out.append(_events.get_nowait())
-        except queue.Empty:
-            break
-    return out
+def pending_events(session_id):
+    with _lock:
+        return [{"id": r["id"], "text": "Reminder: " + r["task"]}
+                for r in _load(REMS_F, [])
+                if r.get("session_id") == session_id and r.get("when", 0) <= time.time()
+                and r.get("id")]
 
 
-def _reminder_loop():
-    while True:
-        try:
-            now = time.time()
-            with _lock:
-                rems = _load(REMS_F, [])
-                due = [r for r in rems if r.get("when", 0) <= now]
-                keep = [r for r in rems if r.get("when", 0) > now]
-                if due:
-                    with open(REMS_F, "w", encoding="utf-8") as f:
-                        json.dump(keep, f, indent=2)
-            for r in due:
-                _events.put(f"⏰ Reminder for you, {USER_NAME}: {r['task']}")
-        except Exception as e:
-            print(f"[reminders] {e}")
-        time.sleep(3)
-
-
-threading.Thread(target=_reminder_loop, daemon=True).start()
+def acknowledge_events(session_id, event_ids):
+    with _lock:
+        rems = _load(REMS_F, [])
+        keep = [r for r in rems if not (r.get("session_id") == session_id
+                and r.get("id") in event_ids and r.get("when", 0) <= time.time())]
+        if len(keep) != len(rems):
+            _save(REMS_F, keep)
 
 
 def _schedule(task, when_epoch):
     with _lock:
         rems = _load(REMS_F, [])
-        rems.append({"task": task, "when": when_epoch})
-        try:
-            with open(REMS_F, "w", encoding="utf-8") as f:
-                json.dump(rems, f, indent=2)
-        except Exception as e:
-            print(f"[reminders] save: {e}")
+        rems.append({"id": str(uuid.uuid4()), "task": task, "when": when_epoch,
+                     "session_id": _session()})
+        _save(REMS_F, rems)
 
 
 # ============================================================================
 #  MAIN COMMAND HANDLER
 # ============================================================================
 
-def handle(text, session_id="default"):
+def handle(text, session_id="default", timezone_offset=0):
     """Record all command turns and keep telemetry local to this request."""
-    token = _request.set({"provider": "local", "cache": False})
+    token = _request.set({"provider": "local", "cache": False,
+                          "session_id": session_id, "timezone_offset": timezone_offset})
     try:
         result = _handle(text, session_id)
         metadata = _request.get()
@@ -936,7 +932,7 @@ def _handle(text, session_id="default"):
     elif re.fullmatch(r"(thanks|thank you)(?: jarvis)?", t):
         say(f"Always at your service, {USER_NAME}.")
     elif t in ("hello", "hi", "hey", "hello jarvis", "hi jarvis", "greetings", "start"):
-        h = datetime.datetime.now().hour
+        h = _now().hour
         tod = "Good morning" if h < 12 else "Good afternoon" if h < 17 else "Good evening"
         say(f"{tod}, {USER_NAME}. JARVIS online and at your command. "
             "Try 'weather', 'news', 'play a song' — or just ask me anything.")
@@ -963,11 +959,11 @@ def _handle(text, session_id="default"):
 
     # ---- time & date ----
     elif re.fullmatch(r"(?:what(?:'s| is)(?: the)? time(?: is it)?|tell me (?:the )?time|current time|time)", t):
-        say(f"It's {datetime.datetime.now().strftime('%I:%M %p')}, {USER_NAME}.")
+        say(f"It's {_now().strftime('%I:%M %p')}, {USER_NAME}.")
     elif re.fullmatch(r"(?:what(?:'s| is) (?:the |today.s )?date|today.s date|date|today)", t):
-        say(f"Today is {datetime.datetime.now().strftime('%A, %B %d, %Y')}.")
+        say(f"Today is {_now().strftime('%A, %B %d, %Y')}.")
     elif re.fullmatch(r"what day(?: is it| is today)?", t):
-        say(f"It's {datetime.datetime.now().strftime('%A')}.")
+        say(f"It's {_now().strftime('%A')}.")
 
     # ---- calculations ----
     elif re.match(r"(?:calculate|compute|what is|what's|solve)\s+([\d\.,\s\+\-\*\/\%\(\)\^]+)$", t):
@@ -1022,7 +1018,7 @@ def _handle(text, session_id="default"):
             task, n, unit = m.group(1), int(m.group(2)), m.group(3)
             secs = n * (1 if unit.startswith("sec") else 60 if unit.startswith("min") else 3600)
             _schedule(task, time.time() + secs)
-            say(f"Reminder set: {task} — in {n} {unit}. (Keep this tab open and I'll alert you.)")
+            say(f"Reminder set: {task} — in {n} {unit}. I'll alert you when this tab is open.")
         elif m2:
             task, hh, mm, ap = m2.group(1), int(m2.group(2)), int(m2.group(3) or 0), m2.group(4)
             if mm > 59 or hh > 23 or (ap and not 1 <= hh <= 12):
@@ -1031,7 +1027,7 @@ def _handle(text, session_id="default"):
                 hh += 12
             if ap and ap.startswith("a") and hh == 12:
                 hh = 0
-            now = datetime.datetime.now()
+            now = _now()
             when = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
             if when <= now:
                 when += datetime.timedelta(days=1)
@@ -1046,26 +1042,29 @@ def _handle(text, session_id="default"):
             say("How shall I phrase that? Try: 'remind me to call mom in 10 minutes'.")
 
     elif re.search(r"\b(my reminders|list reminders|show reminders)\b", t):
-        rems = sorted(_load(REMS_F, []), key=lambda r: r["when"])
+        rems = sorted((r for r in _load(REMS_F, [])
+                       if r.get("session_id") == session_id), key=lambda r: r["when"])
         if not rems:
             say("You have no pending reminders.")
         else:
             say(f"You have {len(rems)} reminder(s):")
             for r in rems:
-                when = datetime.datetime.fromtimestamp(r["when"])
+                when = datetime.datetime.fromtimestamp(r["when"], tz=_now().tzinfo)
                 say(f"• {r['task']} — {when.strftime('%I:%M %p, %b %d')}")
 
     # ---- notes ----
     elif re.match(r"(?:take a note|make a note|add note|note this|note)[:\s]+(.+)", text, flags=re.I):
         body = re.match(r"(?:take a note|make a note|add note|note this|note)[:\s]+(.+)",
                         text, flags=re.I).group(1).strip()
-        notes = _load(NOTES_F, [])
-        notes.append({"text": body,
-                      "time": datetime.datetime.now().isoformat(timespec="seconds")})
-        _save(NOTES_F, notes)
+        with _lock:
+            notes = _load(NOTES_F, [])
+            notes.append({"text": body, "session_id": session_id,
+                          "time": _now().isoformat(timespec="seconds")})
+            _save(NOTES_F, notes)
         say("Noted.")
     elif re.search(r"\b(read|show|list) (my )?notes\b", t):
-        notes = _load(NOTES_F, [])
+        notes = [n for n in _load(NOTES_F, [])
+                 if n.get("session_id") in (None, session_id)]
         if not notes:
             say("You have no notes yet.")
         else:
@@ -1073,7 +1072,9 @@ def _handle(text, session_id="default"):
             for i, n in enumerate(notes, 1):
                 say(f"{i}. {n['text']}")
     elif re.search(r"\b(clear|delete) (all )?(my )?notes\b", t):
-        _save(NOTES_F, [])
+        with _lock:
+            _save(NOTES_F, [n for n in _load(NOTES_F, [])
+                            if n.get("session_id") not in (None, session_id)])
         say("All notes erased.")
 
     # ---- long-term memory (RAG store) ----

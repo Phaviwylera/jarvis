@@ -24,7 +24,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Syntax check (all apps)
-        run: python -m py_compile jarvis.py web/brain.py web/main.py
+        run: python -m py_compile jarvis.py web/brain.py web/main.py web/studio.py
 
       - name: Desktop assistant — offline command smoke test
         run: |
@@ -50,18 +50,20 @@ jobs:
           node-version: '22'
 
       - name: Frontend controller tests
-        run: node tests/frontend.cjs
+        run: |
+          node --check web/static/upgrade.js
+          node tests/frontend.cjs
 
       - name: Web app — boots and answers commands
         run: |
           cd web
-          uvicorn main:app --host 127.0.0.1 --port 8123 &
+          JARVIS_ACCESS_TOKEN=test-ci-code uvicorn main:app --host 127.0.0.1 --port 8123 &
           sleep 5
           curl -sf http://127.0.0.1:8123/api/health
           echo
           curl -sf -X POST http://127.0.0.1:8123/api/command \
-               -H "Content-Type: application/json" -d '{"text":"tell me a joke"}' | grep -q replies
+               -H "Content-Type: application/json" -H "X-Jarvis-Token: test-ci-code" -d '{"text":"tell me a joke"}' | grep -q replies
           curl -sf -X POST http://127.0.0.1:8123/api/command \
-               -H "Content-Type: application/json" -d '{"text":"open youtube"}' | grep -q youtube
+               -H "Content-Type: application/json" -H "X-Jarvis-Token: test-ci-code" -d '{"text":"open youtube"}' | grep -q youtube
           echo "✔ web smoke test passed"
 
